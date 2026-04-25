@@ -1,0 +1,29 @@
+{
+  "name": "jobsift-api",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev":   "nodemon --exec ts-node src/index.ts",
+    "build": "tsc",
+    "start": "npm run build && node dist/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3":     "^11.10.0",
+    "cors":               "^2.8.6",
+    "dotenv":             "^17.3.1",
+    "express":            "^5.2.1",
+    "groq-sdk":           "^0.37.0",
+    "typescript":         "^5.9.3",
+    "ts-node":            "^10.9.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors":           "^2.8.19",
+    "@types/express":        "^5.0.6",
+    "@types/node":           "^25.3.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JobSift Admin</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --sidebar:#0f172a;--sidebar-hover:#1e293b;--sidebar-active:#2d3f5a;--sidebar-border:#1e293b;
+  --bg:#f1f5f9;--surface:#fff;--surface-2:#f8fafc;
+  --border:#e2e8f0;--border-2:#cbd5e1;
+  --ink:#0f172a;--ink-2:#475569;--ink-3:#94a3b8;
+  --blue:#2563eb;--blue-l:#eff6ff;--blue-b:#bfdbfe;
+  --green:#16a34a;--green-l:#f0fdf4;--green-b:#86efac;
+  --amber:#d97706;--amber-l:#fffbeb;--amber-b:#fcd34d;
+  --red:#dc2626;--red-l:#fef2f2;--red-b:#fca5a5;
+  --purple:#7c3aed;--purple-l:#f5f3ff;
+  --cyan:#0891b2;--cyan-l:#ecfeff;
+  --font:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'SF Mono','Fira Code',monospace;
+  --r:8px;--r-lg:12px;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.05);
+  --shadow-lg:0 8px 24px rgba(0,0,0,.10);
+}
+html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);background:var(--bg);line-height:1.55}
+
+/* ── Login ─────────────────────────────────────────────────────── */
+#login{position:fixed;inset:0;background:var(--sidebar);display:flex;align-items:center;justify-content:center;z-index:100}
+.login-card{background:var(--surface);border-radius:16px;padding:40px;width:360px;box-shadow:var(--shadow-lg)}
+.login-logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
+.login-logo svg{flex-shrink:0}
+.login-logo-text{font-size:20px;font-weight:800;letter-spacing:-.4px}
+.login-logo-sub{font-size:11px;color:var(--ink-3);font-weight:500;letter-spacing:.04em;text-transform:uppercase}
+.login-field{margin-bottom:16px}
+.login-field label{display:block;font-size:11px;font-weight:700;color:var(--ink-2);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
+.login-inp{width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:var(--r);font-size:13.5px;font-family:var(--mono);outline:none;transition:border .15s,box-shadow .15s;background:var(--surface)}
+.login-inp:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.login-btn{width:100%;height:40px;background:var(--blue);color:#fff;border:none;border-radius:var(--r);font-size:13.5px;font-weight:700;cursor:pointer;transition:background .14s;margin-top:4px}
+.login-btn:hover{background:#1d4ed8}
+.login-err{font-size:12px;color:var(--red);margin-top:10px;text-align:center;min-height:18px}
+.login-card.shake{animation:shake .4s ease}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+
+/* ── App layout ────────────────────────────────────────────────── */
+.hidden{display:none!important}
+#app{display:flex;height:100vh;overflow:hidden}
+
+/* ── Sidebar ───────────────────────────────────────────────────── */
+.sidebar{width:220px;flex-shrink:0;background:var(--sidebar);display:flex;flex-direction:column;border-right:1px solid var(--sidebar-border)}
+.sb-logo{padding:18px 16px 14px;border-bottom:1px solid var(--sidebar-border)}
+.sb-logo-wrap{display:flex;align-items:center;gap:9px}
+.sb-logo-text{color:#fff;font-size:16px;font-weight:800;letter-spacing:-.3px}
+.sb-logo-badge{background:#1e293b;color:var(--ink-3);font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px;letter-spacing:.04em}
+.sb-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px}
+.sb-section{font-size:10px;font-weight:700;color:#475569;letter-spacing:.08em;text-transform:uppercase;padding:12px 8px 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;color:#94a3b8;font-weight:500;font-size:13px;transition:background .12s,color .12s;user-select:none}
+.nav-item:hover{background:var(--sidebar-hover);color:#e2e8f0}
+.nav-item.active{background:var(--sidebar-active);color:#fff}
+.nav-item svg{flex-shrink:0;opacity:.7}
+.nav-item.active svg{opacity:1}
+.sb-footer{padding:12px 16px;border-top:1px solid var(--sidebar-border)}
+.sb-status{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#64748b;margin-bottom:10px}
+.sb-dot{width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0}
+.sb-dot.err{background:var(--red)}
+.sb-logout{width:100%;height:32px;background:transparent;border:1px solid #1e293b;border-radius:6px;color:#64748b;font-size:12px;font-family:var(--font);cursor:pointer;transition:all .12s}
+.sb-logout:hover{background:#1e293b;color:#e2e8f0}
+
+/* ── Main ──────────────────────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+
+/* ── Topbar ────────────────────────────────────────────────────── */
+.topbar{height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0;gap:16px}
+.topbar-left{display:flex;align-items:center;gap:16px}
+.topbar-title{font-size:17px;font-weight:700;letter-spacing:-.25px}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.refresh-info{font-size:12px;color:var(--ink-3);text-align:right}
+.last-updated{display:block;font-weight:500}
+.countdown{display:block;font-size:11px}
+.btn{height:32px;padding:0 14px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .12s;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border)}
+.btn-refresh{background:var(--surface-2);color:var(--ink-2)}
+.btn-refresh:hover{background:var(--border);color:var(--ink)}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{background:#1d4ed8}
+
+/* ── Content area ──────────────────────────────────────────────── */
+.content{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:20px}
+.view{display:flex;flex-direction:column;gap:20px}
+
+/* ── KPI cards ─────────────────────────────────────────────────── */
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.kpi-card{background:var(--surface);border-radius:var(--r-lg);padding:18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px;border:1px solid var(--border);position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.kpi-blue::before{background:var(--blue)}
+.kpi-green::before{background:var(--green)}
+.kpi-purple::before{background:var(--purple)}
+.kpi-amber::before{background:var(--amber)}
+.kpi-red::before{background:var(--red)}
+.kpi-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+.kpi-blue .kpi-icon{background:var(--blue-l);color:var(--blue)}
+.kpi-green .kpi-icon{background:var(--green-l);color:var(--green)}
+.kpi-purple .kpi-icon{background:var(--purple-l);color:var(--purple)}
+.kpi-amber .kpi-icon{background:var(--amber-l);color:var(--amber)}
+.kpi-red .kpi-icon{background:var(--red-l);color:var(--red)}
+.kpi-value{font-size:26px;font-weight:800;letter-spacing:-.5px;line-height:1.1}
+.kpi-label{font-size:11.5px;font-weight:600;color:var(--ink-2)}
+.kpi-sub{font-size:11px;color:var(--ink-3);margin-top:2px}
+
+/* ── Charts row ─────────────────────────────────────────────────── */
+.charts-row{display:grid;grid-template-columns:1fr 320px;gap:14px}
+.chart-card{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--shadow);overflow:hidden}
+.chart-card.full{grid-column:1/-1}
+.chart-hdr{padding:16px 18px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.chart-title{font-size:13px;font-weight:700;color:var(--ink)}
+.chart-sub{font-size:11px;color:var(--ink-3)}
+.chart-body{padding:16px 18px;position:relative}
+.chart-body canvas{max-height:240px}
+.chart-body.tall canvas{max-height:300px}
+
+/* ── Donut legend ───────────────────────────────────────────────── */
+.donut-legend{padding:0 18px 16px;display:flex;flex-direction:column;gap:8px}
+.legend-item{display:flex;align-items:center;justify-content:space-between}
+.legend-left{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
+.legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.legend-val{font-size:12.5px;font-weight:700;color:var(--ink)}
+
+/* ── Period tabs ────────────────────────────────────────────────── */
+.period-tabs{display:flex;gap:4px;background:var(--surface-2);padding:3px;border-radius:8px;border:1px solid var(--border)}
+.period-btn{height:28px;padding:0 14px;border-radius:6px;border:none;background:transparent;color:var(--ink-3);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .12s}
+.period-btn.active{background:var(--surface);color:var(--blue);box-shadow:var(--shadow)}
+
+/* ── Analytics bottom ───────────────────────────────────────────── */
+.analytics-bottom{display:grid;grid-template-columns:280px 1fr;gap:14px}
+
+/* ── Tables ─────────────────────────────────────────────────────── */
+.table-card{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--shadow);overflow:hidden}
+.table-hdr{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.table-title{font-size:13px;font-weight:700}
+.table-count{font-size:12px;color:var(--ink-3);font-weight:500}
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{padding:9px 14px;text-align:left;font-size:10.5px;font-weight:700;color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase;background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap}
+.tbl td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--ink);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--surface-2)}
+.tbl-mono{font-family:var(--mono);font-size:11.5px}
+.tbl-dim{color:var(--ink-3)}
+
+/* ── Status badges ──────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge-green{background:var(--green-l);color:#14532d;border:1px solid var(--green-b)}
+.badge-amber{background:var(--amber-l);color:#713f12;border:1px solid var(--amber-b)}
+.badge-red{background:var(--red-l);color:#7f1d1d;border:1px solid var(--red-b)}
+.badge-gray{background:var(--surface-2);color:var(--ink-3);border:1px solid var(--border)}
+.badge-blue{background:var(--blue-l);color:#1e40af;border:1px solid var(--blue-b)}
+
+/* ── Filter bar ─────────────────────────────────────────────────── */
+.filter-bar{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--shadow);padding:14px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.filter-label{font-size:11.5px;font-weight:600;color:var(--ink-2)}
+.filter-sel{height:32px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--ink);background:var(--surface);outline:none;cursor:pointer;font-family:var(--font)}
+.filter-sel:focus{border-color:var(--blue)}
+.filter-spacer{flex:1}
+
+/* ── Pagination ─────────────────────────────────────────────────── */
+.pagination{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--border);background:var(--surface-2)}
+.pg-info{font-size:12px;color:var(--ink-3)}
+.pg-btns{display:flex;gap:6px}
+.pg-btn{height:30px;padding:0 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--ink-2);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .12s}
+.pg-btn:hover:not(:disabled){background:var(--border)}
+.pg-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Copy btn ───────────────────────────────────────────────────── */
+.copy-btn{background:none;border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:10px;color:var(--ink-3);cursor:pointer;font-family:var(--font);transition:all .12s;margin-left:4px}
+.copy-btn:hover{background:var(--border);color:var(--ink)}
+
+/* ── Empty & loading states ─────────────────────────────────────── */
+.empty{padding:40px;text-align:center;color:var(--ink-3);font-size:13px}
+.empty svg{margin-bottom:12px;opacity:.3}
+.shimmer{background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200%;animation:shimmer 1.4s infinite;border-radius:6px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.skeleton{height:14px;margin:4px 0}
+
+/* ── Error row ──────────────────────────────────────────────────── */
+.error-cell{color:var(--red);font-size:11px;font-family:var(--mono);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Recent errors section ──────────────────────────────────────── */
+.errors-section{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--red-b);box-shadow:var(--shadow)}
+.errors-hdr{padding:14px 18px;border-bottom:1px solid var(--red-b);display:flex;align-items:center;gap:8px}
+.errors-dot{width:8px;height:8px;border-radius:50%;background:var(--red);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Toast ──────────────────────────────────────────────────────── */
+#toast{position:fixed;bottom:20px;right:20px;background:#0f172a;color:#e2e8f0;padding:10px 16px;border-radius:8px;font-size:12.5px;font-weight:500;box-shadow:var(--shadow-lg);transition:opacity .3s,transform .3s;opacity:0;transform:translateY(8px);pointer-events:none;z-index:200}
+#toast.show{opacity:1;transform:translateY(0)}
+
+/* ── Devices summary ────────────────────────────────────────────── */
+.summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.summary-card{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--shadow);padding:16px 18px}
+.summary-val{font-size:22px;font-weight:800;letter-spacing:-.4px}
+.summary-label{font-size:12px;color:var(--ink-3);margin-top:2px}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.charts-row{grid-template-columns:1fr}.analytics-bottom{grid-template-columns:1fr}}
+@media(max-width:800px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<!-- ── Login ────────────────────────────────────────────────────── -->
+<div id="login">
+  <div class="login-card" id="login-card">
+    <div class="login-logo">
+      <svg viewBox="0 0 28 28" fill="none" width="32" height="32">
+        <circle cx="14" cy="14" r="14" fill="#2563eb"/>
+        <path d="M8 14.5l4 4 8-8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <div class="login-logo-text">JobSift</div>
+        <div class="login-logo-sub">Admin Dashboard</div>
+      </div>
+    </div>
+    <div class="login-field">
+      <label for="secret-inp">Admin Secret</label>
+      <input id="secret-inp" type="password" class="login-inp" placeholder="Enter your ADMIN_SECRET" autocomplete="current-password">
+    </div>
+    <button class="login-btn" onclick="tryLogin()">Sign in</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
+<!-- ── App ──────────────────────────────────────────────────────── -->
+<div id="app" class="hidden">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sb-logo">
+      <div class="sb-logo-wrap">
+        <svg viewBox="0 0 20 20" fill="none" width="22" height="22">
+          <circle cx="10" cy="10" r="10" fill="#2563eb"/>
+          <path d="M5.5 10.5l2.8 2.8 6.2-6.2" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <div class="sb-logo-text">JobSift</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sb-nav">
+      <div class="sb-section">Dashboard</div>
+      <div class="nav-item active" data-view="overview" onclick="navigate('overview')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Overview
+      </div>
+      <div class="nav-item" data-view="analytics" onclick="navigate('analytics')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Analytics
+      </div>
+      <div class="sb-section">Data</div>
+      <div class="nav-item" data-view="logs" onclick="navigate('logs')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Request Logs
+      </div>
+      <div class="nav-item" data-view="devices" onclick="navigate('devices')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Devices
+      </div>
+    </nav>
+
+    <div class="sb-footer">
+      <div class="sb-status">
+        <div class="sb-dot" id="status-dot"></div>
+        <span id="status-text">Connecting…</span>
+      </div>
+      <button class="sb-logout" onclick="logout()">Sign out</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-title" id="page-title">Overview</div>
+      </div>
+      <div class="topbar-right">
+        <div class="refresh-info">
+          <span class="last-updated" id="last-updated">—</span>
+          <span class="countdown" id="countdown"></span>
+        </div>
+        <button class="btn btn-refresh" onclick="manualRefresh()">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- Overview -->
+      <div id="view-overview" class="view">
+        <div class="kpi-grid" id="kpi-cards"></div>
+        <div class="charts-row">
+          <div class="chart-card">
+            <div class="chart-hdr">
+              <div>
+                <div class="chart-title">API activity</div>
+                <div class="chart-sub">Total calls per day · last 7 days</div>
+              </div>
+            </div>
+            <div class="chart-body"><canvas id="activityChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-hdr">
+              <div>
+                <div class="chart-title">Today's breakdown</div>
+                <div class="chart-sub">Calls by endpoint type</div>
+              </div>
+            </div>
+            <div class="chart-body" style="padding-bottom:8px"><canvas id="donutChart" style="max-height:180px"></canvas></div>
+            <div class="donut-legend" id="donut-legend"></div>
+          </div>
+        </div>
+        <div id="recent-errors"></div>
+      </div>
+
+      <!-- Analytics -->
+      <div id="view-analytics" class="view hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="period-tabs" id="period-tabs">
+            <button class="period-btn active" data-days="7" onclick="setPeriod(7,this)">7 days</button>
+            <button class="period-btn" data-days="14" onclick="setPeriod(14,this)">14 days</button>
+            <button class="period-btn" data-days="30" onclick="setPeriod(30,this)">30 days</button>
+          </div>
+        </div>
+        <div class="chart-card full">
+          <div class="chart-hdr">
+            <div>
+              <div class="chart-title">Calls over time by type</div>
+              <div class="chart-sub" id="analytics-sub">Score · Analyze · Parse</div>
+            </div>
+          </div>
+          <div class="chart-body tall"><canvas id="analyticsChart"></canvas></div>
+        </div>
+        <div class="analytics-bottom">
+          <div class="chart-card">
+            <div class="chart-hdr"><div class="chart-title">Endpoint split</div></div>
+            <div class="chart-body" style="padding-bottom:8px"><canvas id="analyticsDonut" style="max-height:180px"></canvas></div>
+            <div class="donut-legend" id="analytics-legend"></div>
+          </div>
+          <div class="table-card">
+            <div class="table-hdr">
+              <div class="table-title">Top devices</div>
+              <div class="table-count" id="top-devices-count"></div>
+            </div>
+            <div id="top-devices-table"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div id="view-logs" class="view hidden">
+        <div class="filter-bar">
+          <span class="filter-label">Endpoint</span>
+          <select class="filter-sel" id="log-endpoint">
+            <option value="">All endpoints</option>
+            <option value="/api/score/batch">Score batch</option>
+            <option value="/api/analyze/job">Analyze job</option>
+            <option value="/api/profile/parse">Parse profile</option>
+          </select>
+          <span class="filter-label">Status</span>
+          <select class="filter-sel" id="log-status">
+            <option value="">All</option>
+            <option value="errors">Errors only (4xx/5xx)</option>
+          </select>
+          <span class="filter-label">Limit</span>
+          <select class="filter-sel" id="log-limit">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+          <div class="filter-spacer"></div>
+          <button class="btn btn-primary" onclick="fetchAndRenderLogs()">Apply filters</button>
+        </div>
+        <div class="table-card">
+          <div class="table-hdr">
+            <div class="table-title">Request logs</div>
+            <div class="table-count" id="logs-count"></div>
+          </div>
+          <div id="logs-table"></div>
+          <div id="log-pagination"></div>
+        </div>
+      </div>
+
+      <!-- Devices -->
+      <div id="view-devices" class="view hidden">
+        <div class="summary-row" id="devices-summary"></div>
+        <div class="table-card">
+          <div class="table-hdr">
+            <div class="table-title">All devices</div>
+            <div class="table-count" id="devices-count"></div>
+          </div>
+          <div id="devices-table"></div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let secret = '';
+let currentView = 'overview';
+let analyticsDays = 7;
+let charts = {};
+let refreshInterval = null;
+let countdownSecs = 30;
+let countdownTick = null;
+let allLogs = [];
+let logsPage = 0;
+const LOGS_PER_PAGE = 25;
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function fmt(n) {
+  if (n == null) return '—';
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000)    return (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'K';
+  return String(n);
+}
+function fmtMs(ms) {
+  if (ms == null || ms === 0) return '—';
+  if (ms >= 1000) return (ms/1000).toFixed(2) + 's';
+  return ms + ' ms';
+}
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60)   return Math.round(diff) + 's ago';
+  if (diff < 3600) return Math.round(diff/60) + 'm ago';
+  if (diff < 86400) return Math.round(diff/3600) + 'h ago';
+  return Math.round(diff/86400) + 'd ago';
+}
+function truncId(id) {
+  if (!id) return '—';
+  return id.substring(0,8) + '…';
+}
+function statusBadge(status) {
+  if (status >= 500) return `<span class="badge badge-red">${status}</span>`;
+  if (status >= 400) return `<span class="badge badge-amber">${status}</span>`;
+  if (status >= 200) return `<span class="badge badge-green">${status}</span>`;
+  return `<span class="badge badge-gray">${status}</span>`;
+}
+function endpointBadge(ep) {
+  if (!ep) return '—';
+  const map = { '/api/score/batch':'Score', '/api/analyze/job':'Analyze', '/api/profile/parse':'Parse' };
+  const label = map[ep] || ep;
+  const cls = ep.includes('score') ? 'badge-blue' : ep.includes('analyze') ? 'badge badge-gray' : 'badge-gray';
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+// ── API ────────────────────────────────────────────────────────────────────────
+async function api(path) {
+  const res = await fetch(path, { headers: { 'X-Admin-Secret': secret } });
+  if (res.status === 403) { logout(); throw new Error('forbidden'); }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+async function tryLogin() {
+  const inp = document.getElementById('secret-inp');
+  const err = document.getElementById('login-err');
+  const val = inp.value.trim();
+  if (!val) { err.textContent = 'Please enter your admin secret.'; return; }
+  err.textContent = 'Checking…';
+  try {
+    const res = await fetch('/admin/stats', { headers: { 'X-Admin-Secret': val } });
+    if (!res.ok) {
+      err.textContent = 'Incorrect secret. Check your ADMIN_SECRET in .env';
+      document.getElementById('login-card').classList.add('shake');
+      setTimeout(() => document.getElementById('login-card').classList.remove('shake'), 400);
+      return;
+    }
+    secret = val;
+    sessionStorage.setItem('js_admin', val);
+    document.getElementById('login').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    setStatus(true);
+    navigate('overview');
+    startAutoRefresh();
+  } catch(e) {
+    err.textContent = 'Could not reach server — is the backend running?';
+  }
+}
+
+function logout() {
+  sessionStorage.removeItem('js_admin');
+  secret = '';
+  stopAutoRefresh();
+  destroyCharts();
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('login').classList.remove('hidden');
+  document.getElementById('secret-inp').value = '';
+  document.getElementById('login-err').textContent = '';
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────────────
+async function navigate(view) {
+  currentView = view;
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === view);
+  });
+  document.querySelectorAll('.view').forEach(el => el.classList.add('hidden'));
+  document.getElementById(`view-${view}`).classList.remove('hidden');
+  const titles = { overview:'Overview', analytics:'Analytics', logs:'Request Logs', devices:'Devices' };
+  document.getElementById('page-title').textContent = titles[view] || view;
+  destroyCharts();
+  await renderView(view);
+}
+
+async function renderView(view) {
+  try {
+    if (view === 'overview')  await renderOverview();
+    if (view === 'analytics') await renderAnalytics(analyticsDays);
+    if (view === 'logs')      await fetchAndRenderLogs();
+    if (view === 'devices')   await renderDevices();
+    setLastUpdated();
+    setStatus(true);
+  } catch(e) {
+    console.error('Render error:', e);
+    setStatus(false);
+  }
+}
+
+// ── Overview ───────────────────────────────────────────────────────────────────
+async function renderOverview() {
+  const [stats, daily] = await Promise.all([
+    api('/admin/stats'),
+    api('/admin/daily?days=7')
+  ]);
+
+  // KPI cards
+  const ct = stats.calls_today;
+  const perf = stats.performance;
+  const devices = stats.devices;
+  const errColor = perf.errors_today > 0 ? 'kpi-red' : 'kpi-green';
+
+  document.getElementById('kpi-cards').innerHTML = `
+    <div class="kpi-card kpi-blue">
+      <div class="kpi-icon">${icons.users}</div>
+      <div class="kpi-value">${fmt(devices.total)}</div>
+      <div class="kpi-label">Total Devices</div>
+      <div class="kpi-sub">+${devices.new_today} new today · ${devices.active_today} active</div>
+    </div>
+    <div class="kpi-card kpi-green">
+      <div class="kpi-icon">${icons.activity}</div>
+      <div class="kpi-value">${fmt(ct.total)}</div>
+      <div class="kpi-label">Calls Today</div>
+      <div class="kpi-sub">${ct.batch} scored · ${ct.analyze} analyzed · ${ct.profile} parsed</div>
+    </div>
+    <div class="kpi-card kpi-purple">
+      <div class="kpi-icon">${icons.chart}</div>
+      <div class="kpi-value">${fmt(stats.calls_week.total)}</div>
+      <div class="kpi-label">Calls This Week</div>
+      <div class="kpi-sub">${fmt(stats.calls_week.batch)} scored · ${fmt(stats.calls_week.analyze)} analyzed</div>
+    </div>
+    <div class="kpi-card kpi-amber">
+      <div class="kpi-icon">${icons.clock}</div>
+      <div class="kpi-value">${fmtMs(perf.avg_latency_ms)}</div>
+      <div class="kpi-label">Avg Response</div>
+      <div class="kpi-sub">Max ${fmtMs(perf.max_latency_ms)} · ${perf.successful_requests_today} ok reqs today</div>
+    </div>
+    <div class="kpi-card ${errColor}">
+      <div class="kpi-icon">${icons.alert}</div>
+      <div class="kpi-value">${perf.errors_today}</div>
+      <div class="kpi-label">Errors Today</div>
+      <div class="kpi-sub">${perf.errors_today === 0 ? 'All clear ✓' : 'Server-side (5xx) errors'}</div>
+    </div>`;
+
+  // Activity line chart
+  const labels = daily.data.map(r => fmtDate(r.date));
+  const totals  = daily.data.map(r => r.total);
+  charts.activity = new Chart(document.getElementById('activityChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Total calls',
+        data: totals,
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37,99,235,0.08)',
+        fill: true,
+        tension: 0.4,
+        borderWidth: 2.5,
+        pointRadius: 4,
+        pointBackgroundColor: '#2563eb',
+        pointBorderColor: '#fff',
+        pointBorderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 11 } } }
+      }
+    }
+  });
+
+  // Donut chart
+  const batchN = ct.batch, analyzeN = ct.analyze, profileN = ct.profile;
+  const total  = ct.total || 1;
+  charts.donut = new Chart(document.getElementById('donutChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Score', 'Analyze', 'Parse'],
+      datasets: [{ data: [batchN, analyzeN, profileN], backgroundColor: ['#2563eb','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  document.getElementById('donut-legend').innerHTML = [
+    ['#2563eb','Score',batchN],
+    ['#7c3aed','Analyze',analyzeN],
+    ['#0891b2','Parse',profileN],
+  ].map(([c,l,v]) => `
+    <div class="legend-item">
+      <div class="legend-left"><div class="legend-dot" style="background:${c}"></div>${l}</div>
+      <div class="legend-val">${fmt(v)} <span style="color:var(--ink-3);font-weight:400;font-size:11px">(${Math.round(v/total*100)}%)</span></div>
+    </div>`).join('');
+
+  // Recent errors
+  const errSection = document.getElementById('recent-errors');
+  if (perf.errors_today > 0) {
+    const errLogs = await api('/admin/logs?errors=true&limit=5');
+    errSection.innerHTML = `
+      <div class="errors-section">
+        <div class="errors-hdr">
+          <div class="errors-dot"></div>
+          <div style="font-size:13px;font-weight:700;color:var(--red)">Recent errors (${perf.errors_today} today)</div>
+        </div>
+        <table class="tbl">
+          <thead><tr><th>Time</th><th>Device</th><th>Endpoint</th><th>Status</th><th>Error</th></tr></thead>
+          <tbody>${errLogs.logs.map(l => `
+            <tr>
+              <td class="tbl-dim">${timeAgo(l.created_at)}</td>
+              <td class="tbl-mono">${truncId(l.device_id)}</td>
+              <td>${endpointBadge(l.endpoint)}</td>
+              <td>${statusBadge(l.status)}</td>
+              <td class="error-cell" title="${l.error||''}">${l.error||'—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } else {
+    errSection.innerHTML = '';
+  }
+}
+
+// ── Analytics ──────────────────────────────────────────────────────────────────
+async function renderAnalytics(days) {
+  analyticsDays = days;
+  document.getElementById('analytics-sub').textContent = `Last ${days} days · Score · Analyze · Parse`;
+
+  const [daily, usage] = await Promise.all([
+    api(`/admin/daily?days=${days}`),
+    api(`/admin/usage?days=${days}&limit=10`)
+  ]);
+
+  destroyChart('analyticsChart');
+  destroyChart('analyticsDonut');
+
+  const labels = daily.data.map(r => fmtDate(r.date));
+  charts.analyticsBar = new Chart(document.getElementById('analyticsChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Score',   data: daily.data.map(r=>r.batch),   backgroundColor: '#2563eb', borderRadius: 3, stack: 'a' },
+        { label: 'Analyze', data: daily.data.map(r=>r.analyze), backgroundColor: '#7c3aed', borderRadius: 3, stack: 'a' },
+        { label: 'Parse',   data: daily.data.map(r=>r.profile), backgroundColor: '#0891b2', borderRadius: 3, stack: 'a' },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'top', labels: { font: { size: 12 }, padding: 16 } } },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 11 } } },
+        y: { stacked: true, beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', font: { size: 11 } } }
+      }
+    }
+  });
+
+  const totBatch   = daily.data.reduce((s,r) => s+r.batch,   0);
+  const totAnalyze = daily.data.reduce((s,r) => s+r.analyze, 0);
+  const totProfile = daily.data.reduce((s,r) => s+r.profile, 0);
+  const totAll     = totBatch + totAnalyze + totProfile || 1;
+
+  charts.analyticsDonut = new Chart(document.getElementById('analyticsDonut'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Score','Analyze','Parse'],
+      datasets: [{ data: [totBatch, totAnalyze, totProfile], backgroundColor: ['#2563eb','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '68%', plugins: { legend: { display: false } } }
+  });
+
+  document.getElementById('analytics-legend').innerHTML = [
+    ['#2563eb','Score',totBatch],
+    ['#7c3aed','Analyze',totAnalyze],
+    ['#0891b2','Parse',totProfile],
+  ].map(([c,l,v]) => `
+    <div class="legend-item">
+      <div class="legend-left"><div class="legend-dot" style="background:${c}"></div>${l}</div>
+      <div class="legend-val">${fmt(v)} <span style="color:var(--ink-3);font-weight:400;font-size:11px">(${Math.round(v/totAll*100)}%)</span></div>
+    </div>`).join('');
+
+  document.getElementById('top-devices-count').textContent = `${usage.count} devices`;
+  document.getElementById('top-devices-table').innerHTML = usage.devices.length === 0
+    ? `<div class="empty">No data for this period</div>`
+    : `<table class="tbl">
+        <thead><tr><th>Device ID</th><th>Score</th><th>Analyze</th><th>Parse</th><th>Total</th><th>Last active</th></tr></thead>
+        <tbody>${usage.devices.map((d,i) => `
+          <tr>
+            <td>
+              <span style="color:var(--ink-3);font-size:11px;margin-right:4px">#${i+1}</span>
+              <span class="tbl-mono">${truncId(d.device_id)}</span>
+              <button class="copy-btn" onclick="copyId('${d.device_id}')">copy</button>
+            </td>
+            <td>${fmt(d.batch)}</td>
+            <td>${fmt(d.analyze)}</td>
+            <td>${fmt(d.profile)}</td>
+            <td><strong>${fmt(d.total)}</strong></td>
+            <td class="tbl-dim">${fmtDate(d.last_active)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+}
+
+function setPeriod(days, btn) {
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  destroyChart('analyticsChart');
+  destroyChart('analyticsDonut');
+  renderAnalytics(days);
+}
+
+// ── Logs ───────────────────────────────────────────────────────────────────────
+async function fetchAndRenderLogs() {
+  const endpoint   = document.getElementById('log-endpoint')?.value || '';
+  const statusFilt = document.getElementById('log-status')?.value || '';
+  const limit      = document.getElementById('log-limit')?.value || '100';
+  let url = `/admin/logs?limit=${limit}`;
+  if (endpoint)               url += `&endpoint=${encodeURIComponent(endpoint)}`;
+  if (statusFilt === 'errors') url += '&errors=true';
+
+  const data = await api(url);
+  allLogs = data.logs;
+  logsPage = 0;
+  document.getElementById('logs-count').textContent = `${data.count} records`;
+  renderLogsPage();
+}
+
+function renderLogsPage() {
+  const start  = logsPage * LOGS_PER_PAGE;
+  const page   = allLogs.slice(start, start + LOGS_PER_PAGE);
+  const total  = allLogs.length;
+  const pages  = Math.ceil(total / LOGS_PER_PAGE);
+
+  document.getElementById('logs-table').innerHTML = page.length === 0
+    ? `<div class="empty">No logs match these filters</div>`
+    : `<table class="tbl">
+        <thead><tr><th>Time</th><th>Device</th><th>Endpoint</th><th>Latency</th><th>Status</th><th>Error</th></tr></thead>
+        <tbody>${page.map(l => `
+          <tr>
+            <td class="tbl-dim" title="${l.created_at}">${timeAgo(l.created_at)}</td>
+            <td>
+              <span class="tbl-mono">${truncId(l.device_id)}</span>
+              ${l.device_id ? `<button class="copy-btn" onclick="copyId('${l.device_id}')">copy</button>` : ''}
+            </td>
+            <td>${endpointBadge(l.endpoint)}</td>
+            <td class="${l.latency_ms > 3000 ? 'kpi-amber' : ''}" style="font-family:var(--mono);font-size:12px">${fmtMs(l.latency_ms)}</td>
+            <td>${statusBadge(l.status)}</td>
+            <td class="error-cell" title="${l.error||''}">${l.error||''}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+  document.getElementById('log-pagination').innerHTML = total > LOGS_PER_PAGE
+    ? `<div class="pagination">
+        <div class="pg-info">Showing ${start+1}–${Math.min(start+LOGS_PER_PAGE,total)} of ${total}</div>
+        <div class="pg-btns">
+          <button class="pg-btn" onclick="changePage(-1)" ${logsPage===0?'disabled':''}>← Previous</button>
+          <button class="pg-btn" onclick="changePage(1)"  ${logsPage>=pages-1?'disabled':''}>Next →</button>
+        </div>
+      </div>` : '';
+}
+
+function changePage(dir) {
+  const pages = Math.ceil(allLogs.length / LOGS_PER_PAGE);
+  logsPage = Math.max(0, Math.min(pages-1, logsPage + dir));
+  renderLogsPage();
+}
+
+// ── Devices ────────────────────────────────────────────────────────────────────
+async function renderDevices() {
+  const [stats, usage] = await Promise.all([
+    api('/admin/stats'),
+    api('/admin/usage?days=30&limit=100')
+  ]);
+
+  document.getElementById('devices-summary').innerHTML = `
+    <div class="summary-card">
+      <div class="summary-val">${fmt(stats.devices.total)}</div>
+      <div class="summary-label">Total devices ever</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-val">${fmt(stats.devices.new_today)}</div>
+      <div class="summary-label">New today</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-val">${fmt(stats.devices.active_today)}</div>
+      <div class="summary-label">Active today</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-val">${fmt(usage.count)}</div>
+      <div class="summary-label">Active last 30 days</div>
+    </div>`;
+
+  document.getElementById('devices-count').textContent = `${usage.count} active in last 30 days`;
+
+  document.getElementById('devices-table').innerHTML = usage.devices.length === 0
+    ? `<div class="empty">No device data yet</div>`
+    : `<table class="tbl">
+        <thead><tr><th>#</th><th>Device ID</th><th>Score calls</th><th>Analyze calls</th><th>Parse calls</th><th>Total</th><th>First active</th><th>Last active</th></tr></thead>
+        <tbody>${usage.devices.map((d,i) => {
+          const isActive = d.last_active === new Date().toISOString().slice(0,10);
+          return `<tr>
+            <td class="tbl-dim">${i+1}</td>
+            <td>
+              <span class="tbl-mono">${truncId(d.device_id)}</span>
+              <button class="copy-btn" onclick="copyId('${d.device_id}')">copy</button>
+              ${isActive ? '<span class="badge badge-green" style="margin-left:6px">active</span>' : ''}
+            </td>
+            <td>${fmt(d.batch)}</td>
+            <td>${fmt(d.analyze)}</td>
+            <td>${fmt(d.profile)}</td>
+            <td><strong>${fmt(d.total)}</strong></td>
+            <td class="tbl-dim">${fmtDate(d.first_active)}</td>
+            <td class="tbl-dim">${fmtDate(d.last_active)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>`;
+}
+
+// ── Auto-refresh ───────────────────────────────────────────────────────────────
+function startAutoRefresh() {
+  stopAutoRefresh();
+  countdownSecs = 7200;
+  updateCountdown();
+  countdownTick = setInterval(() => {
+    countdownSecs--;
+    updateCountdown();
+    if (countdownSecs <= 0) {
+      countdownSecs = 7200;
+      renderView(currentView).then(() => showToast('↻ Data refreshed'));
+    }
+  }, 1000);
+}
+
+function stopAutoRefresh() {
+  clearInterval(countdownTick);
+  countdownTick = null;
+}
+
+function updateCountdown() {
+  const el = document.getElementById('countdown');
+  if (el) el.textContent = `Refreshes in ${countdownSecs}s`;
+}
+
+function manualRefresh() {
+  countdownSecs = 7200;
+  renderView(currentView).then(() => showToast('↻ Refreshed'));
+}
+
+function setLastUpdated() {
+  const el = document.getElementById('last-updated');
+  if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// ── Charts ─────────────────────────────────────────────────────────────────────
+function destroyChart(id) {
+  const key = Object.keys(charts).find(k => charts[k]?.canvas?.id === id);
+  if (key) { charts[key].destroy(); delete charts[key]; }
+}
+
+function destroyCharts() {
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch(_) {} });
+  charts = {};
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+function copyId(id) {
+  navigator.clipboard.writeText(id).then(() => showToast('Device ID copied'));
+}
+
+function setStatus(ok) {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  if (!dot || !text) return;
+  dot.className  = 'sb-dot' + (ok ? '' : ' err');
+  text.textContent = ok ? 'API online' : 'API unreachable';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────────
+const icons = {
+  users:    `<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>`,
+  activity: `<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+  chart:    `<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
+  clock:    `<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+  alert:    `<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+};
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+function init() {
+  // Enter key on login
+  document.getElementById('secret-inp').addEventListener('keydown', e => {
+    if (e.key === 'Enter') tryLogin();
+  });
+
+  // Restore session
+  const stored = sessionStorage.getItem('js_admin');
+  if (stored) {
+    secret = stored;
+    // Silently verify it still works
+    fetch('/admin/stats', { headers: { 'X-Admin-Secret': stored } }).then(r => {
+      if (r.ok) {
+        document.getElementById('login').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+        setStatus(true);
+        navigate('overview');
+        startAutoRefresh();
+      } else {
+        sessionStorage.removeItem('js_admin');
+        secret = '';
+      }
+    }).catch(() => { sessionStorage.removeItem('js_admin'); secret = ''; });
+  }
+}
+
+init();
+</script>
+</body>
+</html>

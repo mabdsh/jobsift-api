@@ -262,6 +262,10 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Devices
       </div>
+      <div class="nav-item" data-view="subscriptions" onclick="navigate('subscriptions')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Subscriptions
+      </div>
     </nav>
 
     <div class="sb-footer">
@@ -403,6 +407,37 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
         </div>
       </div>
 
+      <!-- Subscriptions -->
+      <div id="view-subscriptions" class="view hidden">
+        <div class="kpi-grid" id="sub-kpi-cards"></div>
+        <div class="charts-row">
+          <div class="table-card" style="flex:1">
+            <div class="table-hdr">
+              <div class="table-title">Subscriber devices</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input id="subSearchInp" class="filter-sel" style="width:220px" placeholder="Search by email or device ID…" oninput="subSearch(this.value)">
+                <div class="table-count" id="sub-devices-count"></div>
+              </div>
+            </div>
+            <div id="sub-devices-table"></div>
+          </div>
+          <div class="chart-card" style="width:280px;flex-shrink:0">
+            <div class="chart-hdr"><div class="chart-title">Paywall toggle</div></div>
+            <div class="chart-body" style="display:flex;flex-direction:column;gap:16px;padding:20px 18px">
+              <div id="toggleCard" style="padding:16px;border-radius:10px;border:1px solid var(--color-border-tertiary);background:var(--color-background-secondary)">
+                <div style="font-size:13px;font-weight:600;margin-bottom:4px" id="toggleTitle">Loading…</div>
+                <div style="font-size:11.5px;color:var(--color-text-secondary);margin-bottom:14px" id="toggleDesc"></div>
+                <button id="toggleBtn" onclick="toggleSubscriptions()" style="width:100%;height:36px;border:none;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s">Toggle</button>
+              </div>
+              <div style="font-size:11px;color:var(--color-text-tertiary);line-height:1.55;padding:10px 12px;background:var(--color-background-secondary);border-radius:8px;border:1px solid var(--color-border-tertiary)">
+                <strong>When OFF:</strong> everyone gets Pro limits — no paywall.<br><br>
+                <strong>When ON:</strong> free tier enforced for non-subscribers.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
@@ -521,7 +556,7 @@ async function navigate(view) {
   });
   document.querySelectorAll('.view').forEach(el => el.classList.add('hidden'));
   document.getElementById(`view-${view}`).classList.remove('hidden');
-  const titles = { overview:'Overview', analytics:'Analytics', logs:'Request Logs', devices:'Devices' };
+  const titles = { overview:'Overview', analytics:'Analytics', logs:'Request Logs', devices:'Devices', subscriptions:'Subscriptions' };
   document.getElementById('page-title').textContent = titles[view] || view;
   destroyCharts();
   await renderView(view);
@@ -532,7 +567,8 @@ async function renderView(view) {
     if (view === 'overview')  await renderOverview();
     if (view === 'analytics') await renderAnalytics(analyticsDays);
     if (view === 'logs')      await fetchAndRenderLogs();
-    if (view === 'devices')   await renderDevices();
+    if (view === 'devices')       await renderDevices();
+    if (view === 'subscriptions') await renderSubscriptions();
     setLastUpdated();
     setStatus(true);
   } catch(e) {
@@ -874,13 +910,13 @@ async function renderDevices() {
 // ── Auto-refresh ───────────────────────────────────────────────────────────────
 function startAutoRefresh() {
   stopAutoRefresh();
-  countdownSecs = 7200;
+  countdownSecs = 30;
   updateCountdown();
   countdownTick = setInterval(() => {
     countdownSecs--;
     updateCountdown();
     if (countdownSecs <= 0) {
-      countdownSecs = 7200;
+      countdownSecs = 30;
       renderView(currentView).then(() => showToast('↻ Data refreshed'));
     }
   }, 1000);
@@ -897,7 +933,7 @@ function updateCountdown() {
 }
 
 function manualRefresh() {
-  countdownSecs = 7200;
+  countdownSecs = 30;
   renderView(currentView).then(() => showToast('↻ Refreshed'));
 }
 
@@ -974,6 +1010,147 @@ function init() {
 }
 
 init();
+
+// ── Subscriptions view ────────────────────────────────────────────────────────
+async function renderSubscriptions() {
+  const stats = await api('/admin/subscription/stats');
+  const subEnabled = stats.subscriptions_enabled;
+
+  // KPI cards
+  const free       = stats.tier_counts?.free    || 0;
+  const pro        = stats.tier_counts?.pro     || 0;
+  const active     = stats.active_subscribers   || 0;
+  const overrideP  = stats.override_pro         || 0;
+  const cancelled  = stats.status_counts?.cancelled || 0;
+  const mrr        = stats.estimated_mrr        || 0;
+
+  document.getElementById('sub-kpi-cards').innerHTML = `
+    <div class="kpi-card kpi-blue">
+      <div class="kpi-icon">${icons.users}</div>
+      <div class="kpi-value">${fmt(active)}</div>
+      <div class="kpi-label">Active subscribers</div>
+      <div class="kpi-sub">Est. MRR $${fmt(mrr)}/mo</div>
+    </div>
+    <div class="kpi-card kpi-green">
+      <div class="kpi-icon">${icons.chart}</div>
+      <div class="kpi-value">${fmt(pro)}</div>
+      <div class="kpi-label">Pro devices</div>
+      <div class="kpi-sub">${overrideP} admin override${overrideP !== 1 ? 's' : ''}</div>
+    </div>
+    <div class="kpi-card kpi-amber">
+      <div class="kpi-icon">${icons.activity}</div>
+      <div class="kpi-value">${fmt(free)}</div>
+      <div class="kpi-label">Free devices</div>
+      <div class="kpi-sub">${cancelled} cancelled</div>
+    </div>
+    <div class="kpi-card ${subEnabled ? 'kpi-green' : 'kpi-red'}">
+      <div class="kpi-icon">${icons.alert}</div>
+      <div class="kpi-value" style="font-size:18px">${subEnabled ? 'Active' : 'Inactive'}</div>
+      <div class="kpi-label">Paywall status</div>
+      <div class="kpi-sub">${subEnabled ? 'Free tier limits enforced' : 'All users get Pro'}</div>
+    </div>
+    <div class="kpi-card kpi-purple">
+      <div class="kpi-icon">${icons.clock}</div>
+      <div class="kpi-value">$7</div>
+      <div class="kpi-label">Price / month</div>
+      <div class="kpi-sub">LemonSqueezy · MoR</div>
+    </div>`;
+
+  // Paywall toggle card
+  document.getElementById('toggleTitle').textContent = subEnabled ? '🔴 Paywall is ON' : '🟢 Paywall is OFF';
+  document.getElementById('toggleDesc').textContent = subEnabled
+    ? 'Free users see upgrade prompts and are limited to 30/3/5 daily calls.'
+    : 'Everyone gets 300/30/20 daily calls regardless of subscription.';
+  const btn = document.getElementById('toggleBtn');
+  if (btn) {
+    btn.textContent = subEnabled ? 'Disable paywall' : 'Enable paywall';
+    btn.style.background = subEnabled ? '#dc2626' : '#16a34a';
+    btn.style.color = '#fff';
+  }
+
+  // Load subscriber devices
+  await renderSubDevices('');
+}
+
+async function renderSubDevices(q) {
+  const url = q ? `/admin/subscription/devices?q=${encodeURIComponent(q)}&limit=30` : '/admin/subscription/devices?limit=30';
+  const data = await api(url);
+  document.getElementById('sub-devices-count').textContent = `${data.count} results`;
+  document.getElementById('sub-devices-table').innerHTML = data.devices.length === 0
+    ? `<div class="empty">No subscriber devices found</div>`
+    : `<table class="tbl">
+        <thead><tr><th>Device</th><th>Email</th><th>Tier</th><th>Status</th><th>Override</th><th>Last seen</th><th>Actions</th></tr></thead>
+        <tbody>${data.devices.map(d => `
+          <tr>
+            <td><span class="tbl-mono">${truncId(d.id)}</span><button class="copy-btn" onclick="copyId('${d.id}')">copy</button></td>
+            <td style="font-size:12px;max-width:150px;overflow:hidden;text-overflow:ellipsis">${d.email || '<span style="color:var(--color-text-tertiary)">—</span>'}</td>
+            <td>${d.tier === 'pro' ? '<span class="badge badge-green">Pro</span>' : '<span class="badge badge-gray">Free</span>'}</td>
+            <td>${d.subscription_status ? statusBadge2(d.subscription_status) : '<span class="badge badge-gray">—</span>'}</td>
+            <td>${d.tier_override === 'pro' ? '<span class="badge badge-blue">Override</span>' : '—'}</td>
+            <td class="tbl-dim">${timeAgo(d.last_seen)}</td>
+            <td>
+              ${d.tier_override === 'pro'
+                ? `<button class="pg-btn" onclick="revokeOverride('${d.id}')">Revoke Pro</button>`
+                : `<button class="pg-btn" onclick="grantOverride('${d.id}')">Grant Pro</button>`
+              }
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+}
+
+function statusBadge2(status) {
+  const map = {
+    active:    'badge-green',
+    cancelled: 'badge-amber',
+    past_due:  'badge-amber',
+    expired:   'badge-red',
+  };
+  return `<span class="badge ${map[status] || 'badge-gray'}">${status}</span>`;
+}
+
+let subSearchTimer = null;
+function subSearch(q) {
+  clearTimeout(subSearchTimer);
+  subSearchTimer = setTimeout(() => renderSubDevices(q), 350);
+}
+
+async function toggleSubscriptions() {
+  const btn = document.getElementById('toggleBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const result = await fetch('/admin/subscription/toggle', {
+      method: 'POST',
+      headers: { 'X-Admin-Secret': secret }
+    }).then(r => r.json());
+    showToast(result.message || 'Toggled');
+    await renderSubscriptions();
+  } catch(e) {
+    showToast('Toggle failed — check server logs');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function grantOverride(deviceId) {
+  try {
+    await fetch(`/admin/devices/${deviceId}/grant-pro`, {
+      method: 'POST', headers: { 'X-Admin-Secret': secret }
+    });
+    showToast('Pro override granted ✓');
+    await renderSubDevices(document.getElementById('subSearchInp')?.value || '');
+  } catch(e) { showToast('Failed to grant override'); }
+}
+
+async function revokeOverride(deviceId) {
+  try {
+    await fetch(`/admin/devices/${deviceId}/grant-pro`, {
+      method: 'DELETE', headers: { 'X-Admin-Secret': secret }
+    });
+    showToast('Pro override removed ✓');
+    await renderSubDevices(document.getElementById('subSearchInp')?.value || '');
+  } catch(e) { showToast('Failed to revoke override'); }
+}
 </script>
 </body>
 </html>

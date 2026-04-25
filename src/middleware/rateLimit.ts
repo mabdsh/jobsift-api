@@ -1,15 +1,18 @@
 import { Request, Response, NextFunction } from 'express'
-import { getUsageToday, incrementUsage, UsageType } from '../db/database'
+import {
+  getUsageToday, incrementUsage, UsageType,
+  isSubscriptionsEnabled, getEffectiveTier
+} from '../db/database'
 
-// Daily limits per device — conservative for a free product
-const LIMITS: Record<UsageType, number> = {
-  batch:   150,  // one full LinkedIn page per batch — users browse ~3-5 pages/session
-  analyze:  25,  // panel click — more expensive, less frequent
-  profile:  10,  // auto-fill — users rarely redo this more than once or twice
-}
+// ── Tier limits ────────────────────────────────────────────────────────────────
+// Free: conservative limits — enough to evaluate the tool, not enough for
+//       a serious all-day job search session.
+// Pro:  effectively unlimited for any realistic LinkedIn session.
+const LIMITS = {
+  free: { batch: 30,  analyze: 3,  profile: 5  },
+  pro:  { batch: 300, analyze: 30, profile: 20 },
+} as const
 
-// ISO timestamp of next UTC midnight — shown in the 429 so the extension
-// can display a "resets at X" message instead of a generic error
 function nextMidnightUTC(): string {
   const d = new Date()
   d.setUTCHours(24, 0, 0, 0)
@@ -19,31 +22,36 @@ function nextMidnightUTC(): string {
 export function checkRateLimit(type: UsageType) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const deviceId = req.deviceId
-    if (!deviceId) {
-      // Should never reach here — requireDevice runs first
-      res.status(401).json({ error: 'unauthorized' })
-      return
-    }
+    if (!deviceId) { res.status(401).json({ error: 'unauthorized' }); return }
+
+    // When subscriptions are disabled globally, everyone gets Pro limits.
+    // This is the state during the launch/free phase — one flag controls
+    // the entire paywall without touching user records.
+    const subsEnabled = isSubscriptionsEnabled()
+    const tier        = subsEnabled ? getEffectiveTier(deviceId) : 'pro'
+    const limit       = LIMITS[tier][type]
 
     const usage = getUsageToday(deviceId)
-    const field = `${type}_calls` as keyof typeof usage
-    const used  = usage[field] ?? 0
-    const limit = LIMITS[type]
+    const used  = usage[`${type}_calls` as keyof typeof usage] ?? 0
 
     if (used >= limit) {
+      const needsUpgrade = subsEnabled && tier === 'free'
       res.status(429).json({
-        error:    'rate_limit_exceeded',
-        message:  `Daily limit of ${limit} ${type} requests reached. Resets at midnight UTC.`,
+        error:        'rate_limit_exceeded',
+        message:      needsUpgrade
+          ? `Daily ${type} limit (${limit}) reached. Upgrade to Pro for ${LIMITS.pro[type]} per day.`
+          : `Daily limit of ${limit} ${type} requests reached. Resets at midnight UTC.`,
         limit,
         used,
-        reset_at: nextMidnightUTC(),
+        tier,
+        needs_upgrade: needsUpgrade,
+        reset_at:     nextMidnightUTC(),
       })
       return
     }
 
-    // Increment before the Groq call — failed Groq requests still count.
-    // This prevents someone from hammering the endpoint to consume quota for free
-    // by triggering server errors.
+    // Increment before the Groq call — a failed AI call still counts.
+    // Prevents hammering the endpoint to consume quota for free via server errors.
     incrementUsage(deviceId, type)
     next()
   }

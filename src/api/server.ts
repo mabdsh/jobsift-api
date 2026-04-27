@@ -9,15 +9,20 @@ import { checkRateLimit } from '../middleware/rateLimit'
 import { scoreRouter        } from '../routes/scoreRouter'
 import { analyzeRouter      } from '../routes/analyzeRouter'
 import { profileRouter      } from '../routes/profileRouter'
+import { panelRouter        } from '../routes/panelRouter'
 import { adminRouter        } from '../routes/adminRouter'
 import { webhookRouter      } from '../routes/webhookRouter'
 import { subscriptionRouter } from '../routes/subscriptionRouter'
+import { deviceRouter } from '../routes/deviceRouter'
 
 export const app = express()
 
-// ── Webhook route — MUST come before express.json() ───────────────────────────
-// LemonSqueezy signature verification requires the raw request body (Buffer).
-// express.raw() captures it before JSON parsing transforms it.
+// ── Trust proxy ────────────────────────────────────────────────────────────────
+// Tells Express to trust X-Forwarded-For / X-Real-IP set by Nginx.
+// Without this, req.ip is always 127.0.0.1 (Nginx loopback).
+app.set('trust proxy', 1)
+
+// ── Webhook — MUST come before express.json() ──────────────────────────────────
 app.use(
   '/webhook/lemonsqueezy',
   express.raw({ type: 'application/json' }),
@@ -51,11 +56,9 @@ app.get('/admin-panel', (_req, res) => {
 })
 
 // ── Upgrade / checkout page ────────────────────────────────────────────────────
-// The extension opens this URL in a tab when the user clicks "Upgrade to Pro".
-// We render the page server-side so env vars (variant ID, store name) are injected.
 app.get('/upgrade', (req, res) => {
   const deviceId  = (req.query.device as string ?? '').trim()
-  const variantId = process.env.LEMONSQUEEZY_VARIANT_ID    ?? ''
+  const variantId = process.env.LEMONSQUEEZY_VARIANT_ID      ?? ''
   const store     = process.env.LEMONSQUEEZY_STORE_SUBDOMAIN ?? ''
 
   if (!deviceId || !/^[0-9a-f-]{36}$/i.test(deviceId)) {
@@ -63,8 +66,6 @@ app.get('/upgrade', (req, res) => {
     return
   }
 
-  // LemonSqueezy checkout URL with device_id injected as custom data.
-  // This custom_data object is included in every webhook payload for this purchase.
   const checkoutUrl = variantId && store
     ? `https://${store}.lemonsqueezy.com/checkout/buy/${variantId}?checkout[custom][device_id]=${deviceId}`
     : '#not-configured'
@@ -124,11 +125,11 @@ body{font-family:'DM Sans',sans-serif;background:#F3F5F8;color:#111827;min-heigh
     <ul class="features">
       <li>
         <div class="check"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div><strong>300 AI job scores per day</strong> — enough for any serious job search session</div>
+        <div><strong>Unlimited job panels</strong> — open every job's full breakdown, no daily cap</div>
       </li>
       <li>
         <div class="check"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div><strong>30 deep AI analyses per day</strong> — full job description evaluation on every panel click</div>
+        <div><strong>Unlimited AI deep analysis</strong> — full job description evaluation on every panel</div>
       </li>
       <li>
         <div class="check"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -139,7 +140,7 @@ body{font-family:'DM Sans',sans-serif;background:#F3F5F8;color:#111827;min-heigh
         <div><strong>Cancel anytime</strong> — no contracts, no commitments</div>
       </li>
     </ul>
-    <div class="free-row"><span>Free tier includes</span><span>30 scores · 3 analyses · 5 parses/day</span></div>
+    <div class="free-row"><span>Free tier includes</span><span>5 panels · 3 parses/day · 7-day full trial</span></div>
     <button class="subscribe-btn" id="subscribeBtn" onclick="goCheckout()" ${notConfigured ? 'disabled' : ''}>
       Subscribe — $7/month
     </button>
@@ -164,10 +165,16 @@ app.get('/health', (_req, res) => {
 })
 
 // ── API routes ─────────────────────────────────────────────────────────────────
-app.use('/api/score',        requireDevice, checkRateLimit('batch'),   scoreRouter)
-app.use('/api/analyze',      requireDevice, checkRateLimit('analyze'), analyzeRouter)
+// Batch scoring:  no per-device rate limit — panel gate is the only free-tier wall
+// Deep analysis:  no per-device rate limit — only reachable when a panel is allowed open
+// Profile parse:  rate limited (3 free / 20 pro per day)
+// Panel open:     gated inside panelRouter via recordPanelOpen()
+app.use('/api/score',        requireDevice, scoreRouter)
+app.use('/api/analyze',      requireDevice, analyzeRouter)
 app.use('/api/profile',      requireDevice, checkRateLimit('profile'), profileRouter)
+app.use('/api/panel',        requireDevice, panelRouter)
 app.use('/api/subscription', requireDevice, subscriptionRouter)
+app.use('/api/device',       requireDevice, deviceRouter)
 
 // ── Admin API ──────────────────────────────────────────────────────────────────
 app.use('/admin', adminRouter)

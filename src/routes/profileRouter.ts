@@ -6,7 +6,6 @@ export const profileRouter = Router()
 
 profileRouter.post('/parse', async (req: Request, res: Response) => {
   const start = Date.now()
-
   const { text } = req.body
 
   if (!text || typeof text !== 'string' || text.trim().length < 20) {
@@ -19,8 +18,8 @@ profileRouter.post('/parse', async (req: Request, res: Response) => {
 
   if (text.length > 2000) {
     res.status(400).json({
-      error:   'text_too_long',
-      message: 'text must be 2000 characters or less',
+      error:        'text_too_long',
+      message:      'text must be 2000 characters or less',
       max_length:      2000,
       received_length: text.length,
     })
@@ -39,20 +38,27 @@ profileRouter.post('/parse', async (req: Request, res: Response) => {
 
     res.json({ ok: true, result })
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : 500
+    const isParseError = err?.name === 'GroqParseError'
+    const status       = err?.status === 429 ? 429 : 500
 
     logRequest({
       deviceId:  req.deviceId ?? null,
       endpoint:  '/api/profile/parse',
       latencyMs: Date.now() - start,
       status,
-      error:     err?.message ?? 'unknown',
+      error:     isParseError ? 'GROQ_PARSE_ERROR' : (err?.message ?? 'unknown'),
     })
 
     res.status(status).json({
-      ok:      false,
-      error:   status === 429 ? 'GROQ_RATE_LIMIT' : 'SERVER_ERROR',
-      message: 'Profile parsing temporarily unavailable',
+      ok:    false,
+      error: status === 429
+        ? 'GROQ_RATE_LIMIT'
+        : isParseError ? 'GROQ_PARSE_ERROR' : 'SERVER_ERROR',
+      message: status === 429
+        ? 'Profile parsing busy — try again shortly'
+        : isParseError
+          ? 'AI response malformed — profile parsing temporarily unavailable'
+          : 'Profile parsing temporarily unavailable',
     })
   }
 })

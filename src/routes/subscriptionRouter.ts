@@ -1,47 +1,59 @@
 // JobSift — Subscription Status & Restore Routes
-// Called by the extension on startup and when user restores their subscription.
 
 import { Router, Request, Response } from 'express'
 import {
   isSubscriptionsEnabled, getEffectiveTier,
-  getUsageToday, getDeviceByEmail, db
+  getUsageToday, getTodayPanelOpenCount,
+  getDeviceByEmail, db
 } from '../db/database'
 
 export const subscriptionRouter = Router()
 
 // ── Daily limits reference ─────────────────────────────────────────────────────
+// trial and pro have null limits = unlimited.
+// The extension uses null to know it should not show usage counters.
 const LIMITS = {
-  free: { batch: 30,  analyze: 3,  profile: 5  },
-  pro:  { batch: 300, analyze: 30, profile: 20 },
+  free:  { panel: 5,    profile: 3  },
+  trial: { panel: null, profile: null },
+  pro:   { panel: null, profile: null },
 } as const
 
 // ── GET /api/subscription/status ───────────────────────────────────────────────
-// Called by the extension on startup. Response is cached locally for 1 hour.
-// Returns everything the extension needs to decide what UI to show.
 subscriptionRouter.get('/status', (req: Request, res: Response) => {
-  const deviceId   = req.deviceId!
+  const deviceId    = req.deviceId!
   const subsEnabled = isSubscriptionsEnabled()
   const tier        = subsEnabled ? getEffectiveTier(deviceId) : 'pro'
   const usage       = getUsageToday(deviceId)
+  const panelOpens  = getTodayPanelOpenCount(deviceId)
   const device      = db.prepare(`SELECT * FROM devices WHERE id = ?`).get(deviceId) as any
+
+  // Calculate trial days remaining for the extension to display
+  let trialDaysLeft: number | null = null
+  if (tier === 'trial' && device?.trial_started_at) {
+    const trialEnd = new Date(
+      new Date(device.trial_started_at).getTime() + 7 * 24 * 60 * 60 * 1000
+    )
+    trialDaysLeft = Math.max(0, Math.ceil((trialEnd.getTime() - Date.now()) / 86400000))
+  }
+
+  const tierKey = tier as keyof typeof LIMITS
+  const limits  = LIMITS[tierKey] ?? LIMITS.free
 
   res.json({
     tier,
+    trial_days_left:        trialDaysLeft,
     subscriptions_enabled:  subsEnabled,
     subscription_status:    device?.subscription_status  ?? null,
     subscription_ends_at:   device?.subscription_ends_at ?? null,
-    limits: LIMITS[tier],
+    limits,
     usage_today: {
-      batch:   usage.batch_calls,
-      analyze: usage.analyze_calls,
+      panel:   panelOpens,
       profile: usage.profile_calls,
     },
   })
 })
 
 // ── POST /api/subscription/restore ────────────────────────────────────────────
-// User reinstalled the extension or is on a new device. They enter their email
-// and we link their new device_id to their existing subscription.
 subscriptionRouter.post('/restore', (req: Request, res: Response) => {
   const deviceId = req.deviceId!
   const { email } = req.body
@@ -61,7 +73,6 @@ subscriptionRouter.post('/restore', (req: Request, res: Response) => {
     return
   }
 
-  // Only restore if subscription is still valid (active, cancelled-but-not-expired, or past_due)
   const validStatuses = ['active', 'cancelled', 'past_due']
   if (!validStatuses.includes(existing.subscription_status ?? '')) {
     res.status(400).json({
@@ -71,8 +82,6 @@ subscriptionRouter.post('/restore', (req: Request, res: Response) => {
     return
   }
 
-  // If this is a different device, copy the subscription to the new device_id.
-  // If same device, this is a no-op (already linked).
   if (existing.id !== deviceId) {
     db.prepare(`
       UPDATE devices SET

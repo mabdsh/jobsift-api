@@ -520,9 +520,22 @@ async function tryLogin() {
   try {
     const res = await fetch('/admin/stats', { headers: { 'X-Admin-Secret': val } });
     if (!res.ok) {
-      err.textContent = 'Incorrect secret. Check your ADMIN_SECRET in .env';
-      document.getElementById('login-card').classList.add('shake');
-      setTimeout(() => document.getElementById('login-card').classList.remove('shake'), 400);
+      // Read the structured error message from the backend.
+      // Falls back to a generic message if the response isn't JSON
+      // (e.g. a network-level 429 from Nginx before the app responds).
+      let msg = 'Incorrect secret — check your ADMIN_SECRET in .env';
+      try {
+        const data = await res.json();
+        if (data.message) msg = data.message;
+      } catch (_) {}
+      err.textContent = msg;
+      // Only shake on a wrong secret (403), not on lockout (429).
+      // A lockout message is informational — shaking it implies "try again",
+      // which is the opposite of what we want the user to do.
+      if (res.status !== 429) {
+        document.getElementById('login-card').classList.add('shake');
+        setTimeout(() => document.getElementById('login-card').classList.remove('shake'), 400);
+      }
       return;
     }
     secret = val;
@@ -595,13 +608,13 @@ async function renderOverview() {
       <div class="kpi-icon">${icons.users}</div>
       <div class="kpi-value">${fmt(devices.total)}</div>
       <div class="kpi-label">Total Devices</div>
-      <div class="kpi-sub">+${devices.new_today} new today · ${devices.active_today} active</div>
+      <div class="kpi-sub">+${devices.new_today} new today · ${devices.active_today} active · ${devices.trial_now || 0} in trial</div>
     </div>
     <div class="kpi-card kpi-green">
       <div class="kpi-icon">${icons.activity}</div>
       <div class="kpi-value">${fmt(ct.total)}</div>
       <div class="kpi-label">Calls Today</div>
-      <div class="kpi-sub">${ct.batch} scored · ${ct.analyze} analyzed · ${ct.profile} parsed</div>
+      <div class="kpi-sub">${ct.panel_opens || 0} panels opened · ${ct.profile} parsed · ${ct.batch} scored</div>
     </div>
     <div class="kpi-card kpi-purple">
       <div class="kpi-icon">${icons.chart}</div>
@@ -1041,7 +1054,7 @@ async function renderSubscriptions() {
       <div class="kpi-icon">${icons.activity}</div>
       <div class="kpi-value">${fmt(free)}</div>
       <div class="kpi-label">Free devices</div>
-      <div class="kpi-sub">${cancelled} cancelled</div>
+      <div class="kpi-sub">${cancelled} cancelled · ${stats.trial_active || 0} in trial</div>
     </div>
     <div class="kpi-card ${subEnabled ? 'kpi-green' : 'kpi-red'}">
       <div class="kpi-icon">${icons.alert}</div>
@@ -1049,11 +1062,11 @@ async function renderSubscriptions() {
       <div class="kpi-label">Paywall status</div>
       <div class="kpi-sub">${subEnabled ? 'Free tier limits enforced' : 'All users get Pro'}</div>
     </div>
-    <div class="kpi-card kpi-purple">
+    <div class="kpi-card kpi-cyan">
       <div class="kpi-icon">${icons.clock}</div>
-      <div class="kpi-value">$7</div>
-      <div class="kpi-label">Price / month</div>
-      <div class="kpi-sub">LemonSqueezy · MoR</div>
+      <div class="kpi-value">${fmt(stats.trial_active || 0)}</div>
+      <div class="kpi-label">In trial</div>
+      <div class="kpi-sub">7-day free trial · full access</div>
     </div>`;
 
   // Paywall toggle card
@@ -1116,6 +1129,21 @@ function subSearch(q) {
 }
 
 async function toggleSubscriptions() {
+  // Build a specific confirm message based on the current paywall state
+  // so the admin knows exactly what they're about to do.
+  const isCurrentlyOn = document.getElementById('toggleTitle')
+    ?.textContent?.includes('ON');
+ 
+  const action     = isCurrentlyOn ? 'DISABLE' : 'ENABLE';
+  const consequence = isCurrentlyOn
+    ? 'All users will get Pro limits immediately (no paywall).'
+    : 'Free users will be rate-limited immediately (paywall active).';
+ 
+  const confirmed = window.confirm(
+    `${action} the paywall?\n\n${consequence}\n\nAre you sure?`
+  );
+  if (!confirmed) return;
+ 
   const btn = document.getElementById('toggleBtn');
   if (btn) btn.disabled = true;
   try {

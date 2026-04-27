@@ -2,20 +2,18 @@ import Groq from 'groq-sdk'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
-// Smart model for scoring and analysis — better calibration on complex inputs
-// Fast model for profile parsing — simple extraction, no nuance needed
 const MODEL_SMART = 'llama-3.3-70b-versatile'
 const MODEL_FAST  = 'llama-3.1-8b-instant'
 
-// ── Retry logic — same pattern as Searchology groqClient.ts ──────────────────
+// ── Retry logic ───────────────────────────────────────────────────────────────
 
 const RETRY_DELAYS_MS = [150, 400]
 
 function isRetryable(err: any): boolean {
-  if (!err?.status) return true       // network-level error — always retry
-  if (err.status === 429) return true // Groq rate limit — back off and retry
-  if (err.status >= 500) return true  // Groq server error — transient
-  return false                        // 4xx client errors — do not retry
+  if (!err?.status) return true
+  if (err.status === 429) return true
+  if (err.status >= 500) return true
+  return false
 }
 
 async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
@@ -34,6 +32,15 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
   throw lastErr
 }
 
+// ── Parse error ───────────────────────────────────────────────────────────────
+export class GroqParseError extends Error {
+  constructor(cause: unknown) {
+    super('Groq returned malformed JSON — model may be overloaded or response was truncated')
+    this.name  = 'GroqParseError'
+    this.cause = cause
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseJSON(raw: string): any {
@@ -41,7 +48,11 @@ function parseJSON(raw: string): any {
     .replace(/```json/gi, '')
     .replace(/```/g, '')
     .trim()
-  return JSON.parse(cleaned)
+  try {
+    return JSON.parse(cleaned)
+  } catch (cause) {
+    throw new GroqParseError(cause)
+  }
 }
 
 function fmtK(n: number): string {
@@ -49,7 +60,6 @@ function fmtK(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n)
 }
 
-// Moved from service-worker.js — builds the candidate summary string for prompts
 function buildProfileSummary(p: any): string {
   if (!p) return 'No profile set'
   return [
@@ -133,13 +143,22 @@ Return one entry per job in the same order, no extra fields.`,
 }
 
 // ── analyzeJob ────────────────────────────────────────────────────────────────
+// Updated to return decision + keyRequirements for the improved panel layout.
+// decision:        one direct sentence — apply or skip with a specific reason
+// keyRequirements: top 3 things this job actually needs (extracted from JD)
+// strengths:       specific matching points for THIS role (not generic)
+// gaps:            real gaps with what to do about them
+// tips:            role-specific application tips (not "tailor your resume")
+// insights:        one non-obvious observation about role/team/company
 
 export interface DeepAnalysis {
-  summary:   string
-  strengths: string[]
-  gaps:      string[]
-  tips:      string[]
-  insights:  string
+  decision:        string
+  summary:         string
+  keyRequirements: string[]
+  strengths:       string[]
+  gaps:            string[]
+  tips:            string[]
+  insights:        string
 }
 
 export async function analyzeJob(
@@ -165,20 +184,23 @@ export async function analyzeJob(
     groq.chat.completions.create({
       model:           MODEL_SMART,
       temperature:     0.1,
-      max_tokens:      900,
+      max_tokens:      1100,
       response_format: { type: 'json_object' },
       messages: [
         {
           role:    'system',
-          content: `You are a senior technical recruiter doing a deep evaluation. Be specific — name actual skills and requirements from the job.
+          content: `You are a senior technical recruiter. Be direct, specific, and actionable.
+Name actual technologies, tools, and requirements from the job description — never give generic advice.
 
 Return ONLY valid JSON:
 {
-  "summary":   "<2-3 sentences — specific assessment referencing actual skills/requirements>",
-  "strengths": ["<2-4 specific matching strengths>"],
-  "gaps":      ["<1-3 actual gaps, [] if strong match>"],
-  "tips":      ["<2-3 actionable and specific application tips>"],
-  "insights":  "<one non-obvious observation about this role, team, or company>"
+  "decision":        "<one sentence verdict — e.g. 'Apply — your Laravel+Vue matches their core stack' or 'Skip — requires 8+ years Java, you have 3'>",
+  "summary":         "<2 sentences: what this role involves + how well the candidate fits — be specific about actual tech/requirements>",
+  "keyRequirements": ["<the 3 most important things this job requires, taken directly from the description>"],
+  "strengths":       ["<2-3 specific candidate strengths that directly match THIS job — name the actual tech/experience>"],
+  "gaps":            ["<1-2 real gaps with a brief action — e.g. 'No Kubernetes mentioned — note any container orchestration experience in cover letter'>", or [] if strong match],
+  "tips":            ["<2 specific tips for THIS application — reference actual role details, not generic advice>"],
+  "insights":        "<one non-obvious observation about this specific role, team size, growth stage, or hiring signal>"
 }`,
         },
         {

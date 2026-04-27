@@ -6,7 +6,6 @@ export const scoreRouter = Router()
 
 scoreRouter.post('/batch', async (req: Request, res: Response) => {
   const start = Date.now()
-
   const { profile, jobs } = req.body
 
   if (!profile || !Array.isArray(jobs) || jobs.length === 0) {
@@ -37,22 +36,27 @@ scoreRouter.post('/batch', async (req: Request, res: Response) => {
 
     res.json({ ok: true, results })
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : 500
+    const isParseError = err?.name === 'GroqParseError'
+    const status       = err?.status === 429 ? 429 : 500
 
     logRequest({
       deviceId:  req.deviceId ?? null,
       endpoint:  '/api/score/batch',
       latencyMs: Date.now() - start,
       status,
-      error:     err?.message ?? 'unknown',
+      error:     isParseError ? 'GROQ_PARSE_ERROR' : (err?.message ?? 'unknown'),
     })
 
     res.status(status).json({
-      ok:      false,
-      error:   status === 429 ? 'GROQ_RATE_LIMIT' : 'SERVER_ERROR',
+      ok:    false,
+      error: status === 429
+        ? 'GROQ_RATE_LIMIT'
+        : isParseError ? 'GROQ_PARSE_ERROR' : 'SERVER_ERROR',
       message: status === 429
         ? 'Groq rate limit hit — rule-based scoring applied'
-        : 'Scoring service temporarily unavailable',
+        : isParseError
+          ? 'AI response malformed — rule-based scoring applied'
+          : 'Scoring service temporarily unavailable',
     })
   }
 })

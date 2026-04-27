@@ -4,14 +4,13 @@ import {
   isSubscriptionsEnabled, getEffectiveTier
 } from '../db/database'
 
-// ── Tier limits ────────────────────────────────────────────────────────────────
-// Free: conservative limits — enough to evaluate the tool, not enough for
-//       a serious all-day job search session.
-// Pro:  effectively unlimited for any realistic LinkedIn session.
-const LIMITS = {
-  free: { batch: 30,  analyze: 3,  profile: 5  },
-  pro:  { batch: 300, analyze: 30, profile: 20 },
-} as const
+// ── Limits ────────────────────────────────────────────────────────────────────
+// Only profile parsing is rate-limited here.
+// Panel opens are gated separately via /api/panel/open + recordPanelOpen().
+// Batch scoring and deep analysis have no per-device rate limit —
+// the panel gate is the only enforcement mechanism for free users.
+const FREE_PROFILE_LIMIT = 3
+const PRO_PROFILE_LIMIT  = 20
 
 function nextMidnightUTC(): string {
   const d = new Date()
@@ -24,34 +23,44 @@ export function checkRateLimit(type: UsageType) {
     const deviceId = req.deviceId
     if (!deviceId) { res.status(401).json({ error: 'unauthorized' }); return }
 
-    // When subscriptions are disabled globally, everyone gets Pro limits.
-    // This is the state during the launch/free phase — one flag controls
-    // the entire paywall without touching user records.
+    // When subscriptions are disabled globally, everyone gets unlimited access
     const subsEnabled = isSubscriptionsEnabled()
-    const tier        = subsEnabled ? getEffectiveTier(deviceId) : 'pro'
-    const limit       = LIMITS[tier][type]
+    if (!subsEnabled) { incrementUsage(deviceId, type); next(); return }
+
+    const tier = getEffectiveTier(deviceId)
+
+    // Trial and Pro users have no limits on any endpoint
+    if (tier === 'trial' || tier === 'pro') {
+      incrementUsage(deviceId, type)
+      next()
+      return
+    }
+
+    // Free tier — only profile parsing is limited here
+    if (type !== 'profile') {
+      // batch and analyze: no per-device limit at this middleware layer
+      incrementUsage(deviceId, type)
+      next()
+      return
+    }
 
     const usage = getUsageToday(deviceId)
-    const used  = usage[`${type}_calls` as keyof typeof usage] ?? 0
+    const used  = usage.profile_calls
+    const limit = FREE_PROFILE_LIMIT
 
     if (used >= limit) {
-      const needsUpgrade = subsEnabled && tier === 'free'
       res.status(429).json({
         error:        'rate_limit_exceeded',
-        message:      needsUpgrade
-          ? `Daily ${type} limit (${limit}) reached. Upgrade to Pro for ${LIMITS.pro[type]} per day.`
-          : `Daily limit of ${limit} ${type} requests reached. Resets at midnight UTC.`,
+        message:      `Daily profile parse limit (${limit}) reached. Upgrade to Pro for ${PRO_PROFILE_LIMIT} per day.`,
         limit,
         used,
         tier,
-        needs_upgrade: needsUpgrade,
+        needs_upgrade: true,
         reset_at:     nextMidnightUTC(),
       })
       return
     }
 
-    // Increment before the Groq call — a failed AI call still counts.
-    // Prevents hammering the endpoint to consume quota for free via server errors.
     incrementUsage(deviceId, type)
     next()
   }

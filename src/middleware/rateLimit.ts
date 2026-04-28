@@ -5,12 +5,36 @@ import {
 } from '../db/database'
 
 // ── Limits ────────────────────────────────────────────────────────────────────
-// Only profile parsing is rate-limited here.
-// Panel opens are gated separately via /api/panel/open + recordPanelOpen().
-// Batch scoring and deep analysis have no per-device rate limit —
-// the panel gate is the only enforcement mechanism for free users.
-const FREE_PROFILE_LIMIT = 3
-const PRO_PROFILE_LIMIT  = 20
+//
+// batch:   Primary Groq spend control for free users. 30 calls ≈ 750 jobs/day —
+//          covers a serious job hunter scrolling 2–3 full pages. Pro/Trial get
+//          null (unlimited) because the panel gate doesn't cap batch scoring.
+//
+// analyze: Set one above the panel gate (5/day) so legitimate free users never
+//          see this limit — the panel gate blocks them at 5 panels first.
+//          This is a backend-only abuse backstop against direct API calls that
+//          bypass the panel gate entirely (e.g. someone who extracted the client
+//          secret and is looping /api/analyze/job directly).
+//          Pro/Trial: null (unlimited — matches unlimited panels).
+//
+// profile: User-facing limit shown in the popup. 3/day free, 20/day pro.
+//          Previously pro was unlimited despite the upgrade page advertising 20 —
+//          that inconsistency is now fixed.
+
+const LIMITS = {
+  batch: {
+    free: 30,
+    pro:  null,   // unlimited
+  },
+  analyze: {
+    free: 6,
+    pro:  null,   // unlimited
+  },
+  profile: {
+    free: 3,
+    pro:  20,
+  },
+} as const satisfies Record<UsageType, { free: number; pro: number | null }>
 
 function nextMidnightUTC(): string {
   const d = new Date()
@@ -18,45 +42,64 @@ function nextMidnightUTC(): string {
   return d.toISOString()
 }
 
+// Maps UsageType → the matching field name in UsageRow
+function usageField(
+  type: UsageType
+): 'batch_calls' | 'analyze_calls' | 'profile_calls' {
+  if (type === 'batch')   return 'batch_calls'
+  if (type === 'analyze') return 'analyze_calls'
+  return 'profile_calls'
+}
+
+function limitMessage(type: UsageType, limit: number): string {
+  if (type === 'batch')
+    return `Daily scoring limit (${limit} batches) reached. Upgrade to Pro for unlimited scoring.`
+  if (type === 'analyze')
+    return `Daily analysis limit (${limit}) reached. Upgrade to Pro for unlimited analysis.`
+  return `Daily profile parse limit (${limit}) reached. Upgrade to Pro for 20 per day.`
+}
+
 export function checkRateLimit(type: UsageType) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const deviceId = req.deviceId
     if (!deviceId) { res.status(401).json({ error: 'unauthorized' }); return }
 
-    // When subscriptions are disabled globally, everyone gets unlimited access
-    const subsEnabled = isSubscriptionsEnabled()
-    if (!subsEnabled) { incrementUsage(deviceId, type); next(); return }
-
-    const tier = getEffectiveTier(deviceId)
-
-    // Trial and Pro users have no limits on any endpoint
-    if (tier === 'trial' || tier === 'pro') {
+    // Subscriptions disabled globally → everyone is effectively Pro, no limits
+    if (!isSubscriptionsEnabled()) {
       incrementUsage(deviceId, type)
       next()
       return
     }
 
-    // Free tier — only profile parsing is limited here
-    if (type !== 'profile') {
-      // batch and analyze: no per-device limit at this middleware layer
+    const tier  = getEffectiveTier(deviceId)
+    const isFree = tier === 'free'
+
+    // ── Determine applicable limit ─────────────────────────────────────────
+    // null means unlimited for this tier+type combination
+    const limit: number | null = isFree
+      ? LIMITS[type].free
+      : LIMITS[type].pro    // pro and trial share the same pro limits
+
+    if (limit === null) {
+      // Unlimited — still increment for analytics, then pass through
       incrementUsage(deviceId, type)
       next()
       return
     }
 
+    // ── Check daily usage against limit ────────────────────────────────────
     const usage = getUsageToday(deviceId)
-    const used  = usage.profile_calls
-    const limit = FREE_PROFILE_LIMIT
+    const used  = usage[usageField(type)]
 
     if (used >= limit) {
       res.status(429).json({
-        error:        'rate_limit_exceeded',
-        message:      `Daily profile parse limit (${limit}) reached. Upgrade to Pro for ${PRO_PROFILE_LIMIT} per day.`,
+        error:         'rate_limit_exceeded',
+        message:       limitMessage(type, limit),
         limit,
         used,
         tier,
-        needs_upgrade: true,
-        reset_at:     nextMidnightUTC(),
+        needs_upgrade: isFree,   // only prompt upgrade for free users
+        reset_at:      nextMidnightUTC(),
       })
       return
     }

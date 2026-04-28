@@ -50,6 +50,16 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 
 adminRouter.use(requireAdmin)
 
+// ── Date helper ────────────────────────────────────────────────────────────────
+// Computes a YYYY-MM-DD cutoff date N days back from today (UTC).
+// Used to replace SQL string interpolation (`-${days} days`) with a proper
+// parameterized query value, eliminating the SQL injection surface.
+function utcDateDaysAgo(daysBack: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - daysBack)
+  return d.toISOString().split('T')[0] // → 'YYYY-MM-DD'
+}
+
 // ── GET /admin/stats ───────────────────────────────────────────────────────────
 adminRouter.get('/stats', (_req: Request, res: Response) => {
   const totalDevices = (db.prepare(`SELECT COUNT(*) as c FROM devices`).get() as any).c
@@ -57,25 +67,23 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
   const activeToday  = (db.prepare(`SELECT COUNT(DISTINCT device_id) as c FROM usage WHERE date = date('now')`).get() as any).c
 
   const callsToday = db.prepare(`
-    SELECT COALESCE(SUM(batch_calls),0) as batch,
+    SELECT COALESCE(SUM(batch_calls),0)   as batch,
            COALESCE(SUM(analyze_calls),0) as analyze,
            COALESCE(SUM(profile_calls),0) as profile
     FROM usage WHERE date = date('now')
   `).get() as any
 
   const callsWeek = db.prepare(`
-    SELECT COALESCE(SUM(batch_calls),0) as batch,
+    SELECT COALESCE(SUM(batch_calls),0)   as batch,
            COALESCE(SUM(analyze_calls),0) as analyze,
            COALESCE(SUM(profile_calls),0) as profile
-    FROM usage WHERE date >= date('now', '-7 days')
-  `).get() as any
+    FROM usage WHERE date >= ?
+  `).get(utcDateDaysAgo(6)) as any
 
-  // Panel opens — unique job panels opened today across all devices
   const panelOpensToday = (db.prepare(`
     SELECT COUNT(*) as c FROM panel_opens WHERE date = date('now')
   `).get() as any).c
 
-  // Trial users — devices currently within their 7-day trial window
   const trialUsersNow = (db.prepare(`
     SELECT COUNT(*) as c FROM devices
     WHERE trial_started_at IS NOT NULL
@@ -87,7 +95,7 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
   const perf = db.prepare(`
     SELECT COALESCE(AVG(latency_ms),0) as avg_lat,
            COALESCE(MAX(latency_ms),0) as max_lat,
-           COUNT(*) as total_reqs
+           COUNT(*)                    as total_reqs
     FROM request_logs WHERE date(created_at) = date('now') AND status = 200
   `).get() as any
 
@@ -127,38 +135,49 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
 
 // ── GET /admin/daily ───────────────────────────────────────────────────────────
 adminRouter.get('/daily', (req: Request, res: Response) => {
-  const days = Math.min(parseInt(req.query.days as string) || 7, 90)
+  const days   = Math.min(parseInt(req.query.days as string) || 7, 90)
+  const cutoff = utcDateDaysAgo(days - 1)
+
   const rows = db.prepare(`
     SELECT date,
-      COALESCE(SUM(batch_calls),0)   as batch,
-      COALESCE(SUM(analyze_calls),0) as analyze,
-      COALESCE(SUM(profile_calls),0) as profile,
+      COALESCE(SUM(batch_calls),0)                          as batch,
+      COALESCE(SUM(analyze_calls),0)                        as analyze,
+      COALESCE(SUM(profile_calls),0)                        as profile,
       COALESCE(SUM(batch_calls+analyze_calls+profile_calls),0) as total
-    FROM usage WHERE date >= date('now', '-${days - 1} days')
-    GROUP BY date ORDER BY date ASC
-  `).all() as any[]
+    FROM usage
+    WHERE date >= ?
+    GROUP BY date
+    ORDER BY date ASC
+  `).all(cutoff) as any[]
+
   res.json({ days, data: rows })
 })
 
 // ── GET /admin/latency ─────────────────────────────────────────────────────────
 adminRouter.get('/latency', (req: Request, res: Response) => {
-  const days = Math.min(parseInt(req.query.days as string) || 7, 90)
+  const days   = Math.min(parseInt(req.query.days as string) || 7, 90)
+  const cutoff = utcDateDaysAgo(days - 1)
+
   const rows = db.prepare(`
-    SELECT date(created_at) as date,
-           ROUND(AVG(latency_ms)) as avg_ms,
-           MAX(latency_ms)        as max_ms,
-           COUNT(*)               as requests
+    SELECT date(created_at)        as date,
+           ROUND(AVG(latency_ms))  as avg_ms,
+           MAX(latency_ms)         as max_ms,
+           COUNT(*)                as requests
     FROM request_logs
-    WHERE date(created_at) >= date('now', '-${days - 1} days') AND status = 200
-    GROUP BY date(created_at) ORDER BY date ASC
-  `).all() as any[]
+    WHERE date(created_at) >= ? AND status = 200
+    GROUP BY date(created_at)
+    ORDER BY date ASC
+  `).all(cutoff) as any[]
+
   res.json({ days, data: rows })
 })
 
 // ── GET /admin/usage ───────────────────────────────────────────────────────────
 adminRouter.get('/usage', (req: Request, res: Response) => {
-  const days  = Math.min(parseInt(req.query.days  as string) || 7,  90)
-  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
+  const days   = Math.min(parseInt(req.query.days  as string) || 7,  90)
+  const limit  = Math.min(parseInt(req.query.limit as string) || 20, 100)
+  const cutoff = utcDateDaysAgo(days)
+
   const rows = db.prepare(`
     SELECT d.id as device_id, d.tier, d.tier_override, d.subscription_status, d.email,
       SUM(u.batch_calls)   as batch,
@@ -168,9 +187,12 @@ adminRouter.get('/usage', (req: Request, res: Response) => {
       MIN(u.date) as first_active, MAX(u.date) as last_active
     FROM usage u
     JOIN devices d ON d.id = u.device_id
-    WHERE u.date >= date('now', '-${days} days')
-    GROUP BY u.device_id ORDER BY total DESC LIMIT ?
-  `).all(limit) as any[]
+    WHERE u.date >= ?
+    GROUP BY u.device_id
+    ORDER BY total DESC
+    LIMIT ?
+  `).all(cutoff, limit) as any[]
+
   res.json({ days, count: rows.length, devices: rows })
 })
 
@@ -179,21 +201,34 @@ adminRouter.get('/logs', (req: Request, res: Response) => {
   const limit      = Math.min(parseInt(req.query.limit as string) || 100, 500)
   const errorsOnly = req.query.errors === 'true'
   const endpoint   = req.query.endpoint as string | undefined
+
   const conditions: string[] = []
   const params: any[]        = []
-  if (errorsOnly) { conditions.push('status >= 400') }
-  if (endpoint)   { conditions.push('endpoint = ?'); params.push(endpoint) }
+
+  if (errorsOnly)  { conditions.push('status >= 400') }
+  if (endpoint)    { conditions.push('endpoint = ?'); params.push(endpoint) }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  // LIMIT is parameterized — pass as the final positional param
   const rows = db.prepare(`
     SELECT id, device_id, endpoint, latency_ms, status, error, created_at
-    FROM request_logs ${where} ORDER BY created_at DESC LIMIT ${limit}
-  `).all(...params) as any[]
+    FROM request_logs
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(...params, limit) as any[]
+
   res.json({ count: rows.length, logs: rows })
 })
 
 // ── GET /admin/subscription/stats ─────────────────────────────────────────────
 adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
   const subsEnabled = getSetting('subscriptions_enabled') === 'true'
+
+  // Price per month read from env — single source of truth shared with the
+  // extension's checkout URL. Defaults to 7 if not set.
+  const pricePerMonth = parseFloat(process.env.PRICE_PER_MONTH || '7')
 
   const tierCounts = db.prepare(`
     SELECT tier, COUNT(*) as count FROM devices GROUP BY tier
@@ -226,7 +261,7 @@ adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
     override_pro:          overridePro,
     active_subscribers:    revenueDevices,
     trial_active:          trialActive,
-    estimated_mrr:         revenueDevices * 7,
+    estimated_mrr:         Math.round(revenueDevices * pricePerMonth * 100) / 100,
   })
 })
 
@@ -255,7 +290,8 @@ adminRouter.get('/subscription/devices', (req: Request, res: Response) => {
       SELECT id, email, tier, tier_override, subscription_id, subscription_status,
              subscription_ends_at, first_seen, last_seen
       FROM devices WHERE subscription_id IS NOT NULL
-      ORDER BY last_seen DESC LIMIT ?
+      ORDER BY last_seen DESC
+      LIMIT ?
     `).all(limit) as any[]
     res.json({ count: rows.length, devices: rows })
     return
@@ -266,8 +302,10 @@ adminRouter.get('/subscription/devices', (req: Request, res: Response) => {
            subscription_ends_at, first_seen, last_seen
     FROM devices
     WHERE LOWER(email) LIKE LOWER(?) OR id LIKE ?
-    ORDER BY last_seen DESC LIMIT ?
+    ORDER BY last_seen DESC
+    LIMIT ?
   `).all(`%${q}%`, `${q}%`, limit) as any[]
+
   res.json({ count: rows.length, devices: rows })
 })
 
@@ -277,7 +315,7 @@ adminRouter.post('/devices/:id/grant-pro', (req: Request, res: Response) => {
   const device   = db.prepare(`SELECT id FROM devices WHERE id = ?`).get(deviceId)
   if (!device) { res.status(404).json({ error: 'device_not_found' }); return }
   setTierOverride(deviceId, 'pro')
-  res.json({ ok: true, message: `Device ${deviceId.substring(0,8)}… granted Pro override.` })
+  res.json({ ok: true, message: `Device ${deviceId.substring(0, 8)}… granted Pro override.` })
 })
 
 // ── DELETE /admin/devices/:id/grant-pro ───────────────────────────────────────
@@ -286,5 +324,5 @@ adminRouter.delete('/devices/:id/grant-pro', (req: Request, res: Response) => {
   const device   = db.prepare(`SELECT id FROM devices WHERE id = ?`).get(deviceId)
   if (!device) { res.status(404).json({ error: 'device_not_found' }); return }
   setTierOverride(deviceId, null)
-  res.json({ ok: true, message: `Pro override removed from device ${deviceId.substring(0,8)}….` })
+  res.json({ ok: true, message: `Pro override removed from device ${deviceId.substring(0, 8)}….` })
 })

@@ -11,6 +11,27 @@ import { updateDeviceSubscription }   from '../db/database'
 
 export const webhookRouter = Router()
 
+// Maps a LemonSqueezy subscription status to the tier stored in our database.
+// This is the single source of truth for status → tier — used by subscription_updated
+// which can arrive with any status. The dedicated event handlers (cancelled,
+// expired, payment_failed) call updateDeviceSubscription directly with their known
+// tier, but subscription_updated needs to handle all cases because LemonSqueezy can
+// fire it alongside any lifecycle event, sometimes after the dedicated handler.
+//
+// Critical: past_due and cancelled must stay 'pro' so getEffectiveTier() can enforce
+// the grace period logic that checks device.tier === 'pro' before inspecting
+// subscription_status. Setting them to 'free' here would skip that check entirely.
+function tierForStatus(status: string | undefined): 'pro' | 'free' {
+  switch (status) {
+    case 'active':    return 'pro'   // paying and current
+    case 'past_due':  return 'pro'   // payment failed, still in grace period
+    case 'cancelled': return 'pro'   // paid through subscription_ends_at
+    case 'expired':   return 'free'  // billing period ended after cancellation
+    case 'paused':    return 'free'  // subscription on hold
+    default:          return 'free'  // unknown status — safe default
+  }
+}
+
 // Verify X-Signature header using HMAC-SHA256 of the raw body.
 // Uses timingSafeEqual to prevent timing attacks.
 function verifySignature(rawBody: Buffer, signature: string): boolean {
@@ -71,7 +92,7 @@ webhookRouter.post('/', (req: Request, res: Response) => {
         email,
         subscriptionId: subId,
         status: attrs?.status ?? 'active',
-        tier:   attrs?.status === 'active' ? 'pro' : 'free',
+        tier:   tierForStatus(attrs?.status),
         endsAt: attrs?.ends_at ?? null,
       })
       break

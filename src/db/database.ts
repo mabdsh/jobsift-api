@@ -10,7 +10,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true })
 
 export const db = new Database(DB_PATH)
 
-const TRIAL_DAYS       = 7
+const TRIAL_DAYS       = 5
 const FREE_PANEL_LIMIT = 5
 
 export function initDatabase(): void {
@@ -414,19 +414,36 @@ export function setTierOverride(deviceId: string, override: 'pro' | null): void 
 
 const LOG_RETENTION_DAYS = 30
 
+// Returns a YYYY-MM-DD date string N days back from today (UTC).
+// Used for parameterized queries — avoids string interpolation in SQL.
+function utcDateDaysAgo(daysBack: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - daysBack)
+  return d.toISOString().split('T')[0]
+}
+
 export function cleanupOldLogs(): void {
   try {
-    const logs = db
-      .prepare(`DELETE FROM request_logs WHERE created_at < datetime('now', '-${LOG_RETENTION_DAYS} days')`)
-      .run()
-    const panels = db
-      .prepare(`DELETE FROM panel_opens WHERE date < date('now', '-${LOG_RETENTION_DAYS} days')`)
-      .run()
-    const total = logs.changes + panels.changes
+    const cutoff = utcDateDaysAgo(LOG_RETENTION_DAYS)
+    const logs   = db.prepare(`DELETE FROM request_logs WHERE created_at < ?`).run(cutoff)
+    const panels = db.prepare(`DELETE FROM panel_opens   WHERE date        < ?`).run(cutoff)
+    const total  = logs.changes + panels.changes
     if (total > 0) {
       console.log(`[Cleanup] Pruned ${logs.changes} log rows + ${panels.changes} panel_open rows`)
     }
   } catch (err) {
     console.error('[Cleanup] Failed:', err)
+  }
+}
+
+// Clears all rows from request_logs immediately. Called by DELETE /admin/logs.
+export function clearRequestLogs(): { deletedCount: number } {
+  try {
+    const result = db.prepare(`DELETE FROM request_logs`).run()
+    console.log(`[Admin] Cleared ${result.changes} request log rows`)
+    return { deletedCount: result.changes }
+  } catch (err) {
+    console.error('[Admin] clearRequestLogs failed:', err)
+    return { deletedCount: 0 }
   }
 }

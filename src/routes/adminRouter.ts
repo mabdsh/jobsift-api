@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express'
-import { db, getSetting, setSetting, setTierOverride } from '../db/database'
+import { db, getSetting, setSetting, setTierOverride, clearRequestLogs } from '../db/database'
 
 export const adminRouter = Router()
 
@@ -54,6 +54,8 @@ adminRouter.use(requireAdmin)
 // Computes a YYYY-MM-DD cutoff date N days back from today (UTC).
 // Used to replace SQL string interpolation (`-${days} days`) with a proper
 // parameterized query value, eliminating the SQL injection surface.
+// NOTE: database.ts defines an identical private copy for cleanupOldLogs.
+//       If this helper grows, move both to src/utils/dateUtils.ts.
 function utcDateDaysAgo(daysBack: number): string {
   const d = new Date()
   d.setUTCDate(d.getUTCDate() - daysBack)
@@ -220,6 +222,17 @@ adminRouter.get('/logs', (req: Request, res: Response) => {
   `).all(...params, limit) as any[]
 
   res.json({ count: rows.length, logs: rows })
+})
+
+// ── DELETE /admin/logs ─────────────────────────────────────────────────────────
+// Clears all rows from request_logs. Irreversible — admin must confirm in UI.
+adminRouter.delete('/logs', (_req: Request, res: Response) => {
+  const { deletedCount } = clearRequestLogs()
+  res.json({
+    ok:           true,
+    deletedCount,
+    message:      `Cleared ${deletedCount} request log ${deletedCount === 1 ? 'entry' : 'entries'}.`,
+  })
 })
 
 // ── GET /admin/subscription/stats ─────────────────────────────────────────────

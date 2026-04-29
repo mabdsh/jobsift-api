@@ -24,8 +24,15 @@ scoreRouter.post('/batch', async (req: Request, res: Response) => {
     return
   }
 
+  // Silently truncate rawText on each job — the extension already self-limits
+  // to 4000 chars, but this guards against direct API callers or future changes.
+  const sanitizedJobs = jobs.map((j: any) => ({
+    ...j,
+    rawText: typeof j.rawText === 'string' ? j.rawText.slice(0, 4000) : '',
+  }))
+
   try {
-    const results = await batchScoreJobs(profile, jobs)
+    const results = await batchScoreJobs(profile, sanitizedJobs)
 
     logRequest({
       deviceId:  req.deviceId ?? null,

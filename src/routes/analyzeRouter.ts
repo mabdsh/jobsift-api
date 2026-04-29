@@ -16,8 +16,14 @@ analyzeRouter.post('/job', async (req: Request, res: Response) => {
     return
   }
 
+  // Silently truncate — the extension already self-limits to 4500 chars,
+  // but a direct API caller or a broken scraper could send more.
+  const safeDescription = typeof fullDescription === 'string'
+    ? fullDescription.slice(0, 4500)
+    : ''
+
   try {
-    const result = await analyzeJob(profile, jobData, fullDescription ?? '')
+    const result = await analyzeJob(profile, jobData, safeDescription)
 
     logRequest({
       deviceId:  req.deviceId ?? null,

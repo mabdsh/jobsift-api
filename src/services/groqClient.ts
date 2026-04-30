@@ -2,20 +2,18 @@ import Groq from 'groq-sdk'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
-// Smart model for scoring and analysis — better calibration on complex inputs
-// Fast model for profile parsing — simple extraction, no nuance needed
 const MODEL_SMART = 'llama-3.3-70b-versatile'
 const MODEL_FAST  = 'llama-3.1-8b-instant'
 
-// ── Retry logic — same pattern as Searchology groqClient.ts ──────────────────
+// ── Retry logic ───────────────────────────────────────────────────────────────
 
 const RETRY_DELAYS_MS = [150, 400]
 
 function isRetryable(err: any): boolean {
-  if (!err?.status) return true       // network-level error — always retry
-  if (err.status === 429) return true // Groq rate limit — back off and retry
-  if (err.status >= 500) return true  // Groq server error — transient
-  return false                        // 4xx client errors — do not retry
+  if (!err?.status) return true
+  if (err.status === 429) return true
+  if (err.status >= 500) return true
+  return false
 }
 
 async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
@@ -34,6 +32,16 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
   throw lastErr
 }
 
+// ── Parse error ───────────────────────────────────────────────────────────────
+export class GroqParseError extends Error {
+  cause: unknown
+  constructor(cause: unknown) {
+    super('Groq returned malformed JSON — model may be overloaded or response was truncated')
+    this.name  = 'GroqParseError'
+    this.cause = cause
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseJSON(raw: string): any {
@@ -41,7 +49,11 @@ function parseJSON(raw: string): any {
     .replace(/```json/gi, '')
     .replace(/```/g, '')
     .trim()
-  return JSON.parse(cleaned)
+  try {
+    return JSON.parse(cleaned)
+  } catch (cause) {
+    throw new GroqParseError(cause)
+  }
 }
 
 function fmtK(n: number): string {
@@ -49,7 +61,6 @@ function fmtK(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n)
 }
 
-// Moved from service-worker.js — builds the candidate summary string for prompts
 function buildProfileSummary(p: any): string {
   if (!p) return 'No profile set'
   return [
@@ -104,7 +115,7 @@ export async function batchScoreJobs(
           content: `You are an expert recruiter scoring job-candidate fit. Be honest and calibrated.
 
 Score guide: 85-100=exceptional, 70-84=strong, 50-69=reasonable, 30-49=weak, 0-29=poor.
-Label rules: green≥75, amber 50-74, red <50.
+Label rules: green≥70, amber 50-69, red <50.
 Hard rules:
 - If candidate's critical/must-have skills are absent from the job title: cap score at 55
 - If job contains any candidate deal-breakers: score must be 0-15
@@ -133,13 +144,22 @@ Return one entry per job in the same order, no extra fields.`,
 }
 
 // ── analyzeJob ────────────────────────────────────────────────────────────────
+// Updated to return decision + keyRequirements for the improved panel layout.
+// decision:        one direct sentence — apply or skip with a specific reason
+// keyRequirements: top 3 things this job actually needs (extracted from JD)
+// strengths:       specific matching points for THIS role (not generic)
+// gaps:            real gaps with what to do about them
+// tips:            role-specific application tips (not "tailor your resume")
+// insights:        one non-obvious observation about role/team/company
 
 export interface DeepAnalysis {
-  summary:   string
-  strengths: string[]
-  gaps:      string[]
-  tips:      string[]
-  insights:  string
+  decision:        string
+  summary:         string
+  keyRequirements: string[]
+  strengths:       string[]
+  gaps:            string[]
+  tips:            string[]
+  insights:        string
 }
 
 export async function analyzeJob(
@@ -165,21 +185,28 @@ export async function analyzeJob(
     groq.chat.completions.create({
       model:           MODEL_SMART,
       temperature:     0.1,
-      max_tokens:      900,
+      max_tokens:      1100,
       response_format: { type: 'json_object' },
       messages: [
         {
           role:    'system',
-          content: `You are a senior technical recruiter doing a deep evaluation. Be specific — name actual skills and requirements from the job.
+          content: `You are a senior career coach helping a candidate decide whether to apply and how to win this specific role.
+Be direct, specific, and tactical. Name actual technologies and requirements. Never give generic advice.
+Think like someone who wants this candidate to succeed.
 
 Return ONLY valid JSON:
 {
-  "summary":   "<2-3 sentences — specific assessment referencing actual skills/requirements>",
-  "strengths": ["<2-4 specific matching strengths>"],
-  "gaps":      ["<1-3 actual gaps, [] if strong match>"],
-  "tips":      ["<2-3 actionable and specific application tips>"],
-  "insights":  "<one non-obvious observation about this role, team, or company>"
-}`,
+  "decision":        "<one clear verdict — e.g. 'Apply — your Laravel+Vue directly matches their core stack' or 'Stretch — worth applying if you lead with your API work'>",
+  "summary":         "<2 sentences: what this role actually involves day-to-day + how well the candidate fits. Be specific about the real tech and team context.>",
+  "keyRequirements": ["<top 3 things this job is actually hiring for — pulled verbatim or closely from the description>"],
+  "strengths":       ["<2-3 specific reasons this candidate stands out for THIS role — name the matching tech/experience and why it matters to this employer>"],
+  "gaps":            ["<gap description — address it by: specific tactic for this application>"],
+  "tips":            ["<Cover letter: specific angle to lead with for this role and company>", "<CV: one specific reordering or emphasis change for this application>", "<Interview: one likely question based on the gaps or role complexity>"],
+  "insights":        "<one honest, non-obvious coaching observation — could be about role fit, company signal, salary vs market, team dynamics, or a hidden opportunity in the JD>"
+}
+
+For gaps: phrase as "No [skill] mentioned — address it by: [specific action]". Use [] if strong match with no real gaps.
+For tips: be role-specific. Reference actual requirements from the JD. No phrases like "tailor your resume" or "highlight relevant experience".`,
         },
         {
           role:    'user',

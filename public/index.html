@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>JobSift Admin</title>
+<title>Rolevance Admin</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --sidebar:#0f172a;--sidebar-hover:#1e293b;--sidebar-active:#2d3f5a;--sidebar-border:#1e293b;
+  --sidebar:#0F1F15;--sidebar-hover:#163526;--sidebar-active:#1F4A35;--sidebar-border:#163526;
   --bg:#f1f5f9;--surface:#fff;--surface-2:#f8fafc;
   --border:#e2e8f0;--border-2:#cbd5e1;
-  --ink:#0f172a;--ink-2:#475569;--ink-3:#94a3b8;
-  --blue:#2563eb;--blue-l:#eff6ff;--blue-b:#bfdbfe;
+  --ink:#0A1A12;--ink-2:#3B5247;--ink-3:#6B8A7B;
+  --blue:#059669;--blue-l:#ECFDF5;--blue-b:#A7F3D0;
   --green:#16a34a;--green-l:#f0fdf4;--green-b:#86efac;
   --amber:#d97706;--amber-l:#fffbeb;--amber-b:#fcd34d;
   --red:#dc2626;--red-l:#fef2f2;--red-b:#fca5a5;
@@ -35,9 +35,9 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 .login-field{margin-bottom:16px}
 .login-field label{display:block;font-size:11px;font-weight:700;color:var(--ink-2);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
 .login-inp{width:100%;height:40px;padding:0 12px;border:1.5px solid var(--border);border-radius:var(--r);font-size:13.5px;font-family:var(--mono);outline:none;transition:border .15s,box-shadow .15s;background:var(--surface)}
-.login-inp:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.login-inp:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(5,150,105,.12)}
 .login-btn{width:100%;height:40px;background:var(--blue);color:#fff;border:none;border-radius:var(--r);font-size:13.5px;font-weight:700;cursor:pointer;transition:background .14s;margin-top:4px}
-.login-btn:hover{background:#1d4ed8}
+.login-btn:hover{background:#047857}
 .login-err{font-size:12px;color:var(--red);margin-top:10px;text-align:center;min-height:18px}
 .login-card.shake{animation:shake .4s ease}
 @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
@@ -51,7 +51,7 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 .sb-logo{padding:18px 16px 14px;border-bottom:1px solid var(--sidebar-border)}
 .sb-logo-wrap{display:flex;align-items:center;gap:9px}
 .sb-logo-text{color:#fff;font-size:16px;font-weight:800;letter-spacing:-.3px}
-.sb-logo-badge{background:#1e293b;color:var(--ink-3);font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px;letter-spacing:.04em}
+.sb-logo-badge{background:#163526;color:var(--ink-3);font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px;letter-spacing:.04em}
 .sb-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px}
 .sb-section{font-size:10px;font-weight:700;color:#475569;letter-spacing:.08em;text-transform:uppercase;padding:12px 8px 4px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;color:#94a3b8;font-weight:500;font-size:13px;transition:background .12s,color .12s;user-select:none}
@@ -63,8 +63,8 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 .sb-status{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#64748b;margin-bottom:10px}
 .sb-dot{width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0}
 .sb-dot.err{background:var(--red)}
-.sb-logout{width:100%;height:32px;background:transparent;border:1px solid #1e293b;border-radius:6px;color:#64748b;font-size:12px;font-family:var(--font);cursor:pointer;transition:all .12s}
-.sb-logout:hover{background:#1e293b;color:#e2e8f0}
+.sb-logout{width:100%;height:32px;background:transparent;border:1px solid #163526;border-radius:6px;color:#94a3b8;font-size:12px;font-family:var(--font);cursor:pointer;transition:all .12s}
+.sb-logout:hover{background:#163526;color:#e2e8f0}
 
 /* ── Main ──────────────────────────────────────────────────────── */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
@@ -81,7 +81,7 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 .btn-refresh{background:var(--surface-2);color:var(--ink-2)}
 .btn-refresh:hover{background:var(--border);color:var(--ink)}
 .btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
-.btn-primary:hover{background:#1d4ed8}
+.btn-primary:hover{background:#047857}
 .btn-danger{background:var(--red-l);color:var(--red);border-color:var(--red-b)}
 .btn-danger:hover{background:var(--red);color:#fff;border-color:var(--red)}
 
@@ -153,7 +153,7 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 .badge-amber{background:var(--amber-l);color:#713f12;border:1px solid var(--amber-b)}
 .badge-red{background:var(--red-l);color:#7f1d1d;border:1px solid var(--red-b)}
 .badge-gray{background:var(--surface-2);color:var(--ink-3);border:1px solid var(--border)}
-.badge-blue{background:var(--blue-l);color:#1e40af;border:1px solid var(--blue-b)}
+.badge-blue{background:var(--blue-l);color:#047857;border:1px solid var(--blue-b)}
 
 /* ── Filter bar ─────────────────────────────────────────────────── */
 .filter-bar{background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--shadow);padding:14px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -191,7 +191,7 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ── Toast ──────────────────────────────────────────────────────── */
-#toast{position:fixed;bottom:20px;right:20px;background:#0f172a;color:#e2e8f0;padding:10px 16px;border-radius:8px;font-size:12.5px;font-weight:500;box-shadow:var(--shadow-lg);transition:opacity .3s,transform .3s;opacity:0;transform:translateY(8px);pointer-events:none;z-index:200}
+#toast{position:fixed;bottom:20px;right:20px;background:#0F1F15;color:#e2e8f0;padding:10px 16px;border-radius:8px;font-size:12.5px;font-weight:500;box-shadow:var(--shadow-lg);transition:opacity .3s,transform .3s;opacity:0;transform:translateY(8px);pointer-events:none;z-index:200}
 #toast.show{opacity:1;transform:translateY(0)}
 
 /* ── Devices summary ────────────────────────────────────────────── */
@@ -211,12 +211,13 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
 <div id="login">
   <div class="login-card" id="login-card">
     <div class="login-logo">
-      <svg viewBox="0 0 28 28" fill="none" width="32" height="32">
-        <circle cx="14" cy="14" r="14" fill="#2563eb"/>
-        <path d="M8 14.5l4 4 8-8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg viewBox="0 0 32 32" fill="none" width="36" height="36">
+        <rect width="32" height="32" rx="9" fill="#163526"/>
+        <circle cx="16" cy="16" r="9.5" fill="none" stroke="#6EE7B7" stroke-width="1.8"/>
+        <circle cx="18.5" cy="13.5" r="3.5" fill="#059669"/>
       </svg>
       <div>
-        <div class="login-logo-text">JobSift</div>
+        <div class="login-logo-text">Rolevance</div>
         <div class="login-logo-sub">Admin Dashboard</div>
       </div>
     </div>
@@ -235,12 +236,12 @@ html,body{height:100%;font-family:var(--font);font-size:13.5px;color:var(--ink);
   <aside class="sidebar">
     <div class="sb-logo">
       <div class="sb-logo-wrap">
-        <svg viewBox="0 0 20 20" fill="none" width="22" height="22">
-          <circle cx="10" cy="10" r="10" fill="#2563eb"/>
-          <path d="M5.5 10.5l2.8 2.8 6.2-6.2" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg viewBox="0 0 22 22" fill="none" width="24" height="24">
+          <circle cx="11" cy="11" r="8.5" fill="none" stroke="#6EE7B7" stroke-width="1.5"/>
+          <circle cx="13" cy="9" r="3.2" fill="#059669"/>
         </svg>
         <div>
-          <div class="sb-logo-text">JobSift</div>
+          <div class="sb-logo-text">Rolevance</div>
         </div>
       </div>
     </div>
@@ -648,13 +649,13 @@ async function renderOverview() {
       datasets: [{
         label: 'Total calls',
         data: totals,
-        borderColor: '#2563eb',
-        backgroundColor: 'rgba(37,99,235,0.08)',
+        borderColor: '#059669',
+        backgroundColor: 'rgba(5,150,105,0.08)',
         fill: true,
         tension: 0.4,
         borderWidth: 2.5,
         pointRadius: 4,
-        pointBackgroundColor: '#2563eb',
+        pointBackgroundColor: '#059669',
         pointBorderColor: '#fff',
         pointBorderWidth: 2,
       }]
@@ -677,7 +678,7 @@ async function renderOverview() {
     type: 'doughnut',
     data: {
       labels: ['Score', 'Analyze', 'Parse'],
-      datasets: [{ data: [batchN, analyzeN, profileN], backgroundColor: ['#2563eb','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+      datasets: [{ data: [batchN, analyzeN, profileN], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
     },
     options: {
       responsive: true,
@@ -688,7 +689,7 @@ async function renderOverview() {
   });
 
   document.getElementById('donut-legend').innerHTML = [
-    ['#2563eb','Score',batchN],
+    ['#059669','Score',batchN],
     ['#7c3aed','Analyze',analyzeN],
     ['#0891b2','Parse',profileN],
   ].map(([c,l,v]) => `
@@ -744,7 +745,7 @@ async function renderAnalytics(days) {
     data: {
       labels,
       datasets: [
-        { label: 'Score',   data: daily.data.map(r=>r.batch),   backgroundColor: '#2563eb', borderRadius: 3, stack: 'a' },
+        { label: 'Score',   data: daily.data.map(r=>r.batch),   backgroundColor: '#059669', borderRadius: 3, stack: 'a' },
         { label: 'Analyze', data: daily.data.map(r=>r.analyze), backgroundColor: '#7c3aed', borderRadius: 3, stack: 'a' },
         { label: 'Parse',   data: daily.data.map(r=>r.profile), backgroundColor: '#0891b2', borderRadius: 3, stack: 'a' },
       ]
@@ -769,13 +770,13 @@ async function renderAnalytics(days) {
     type: 'doughnut',
     data: {
       labels: ['Score','Analyze','Parse'],
-      datasets: [{ data: [totBatch, totAnalyze, totProfile], backgroundColor: ['#2563eb','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+      datasets: [{ data: [totBatch, totAnalyze, totProfile], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: '68%', plugins: { legend: { display: false } } }
   });
 
   document.getElementById('analytics-legend').innerHTML = [
-    ['#2563eb','Score',totBatch],
+    ['#059669','Score',totBatch],
     ['#7c3aed','Analyze',totAnalyze],
     ['#0891b2','Parse',totProfile],
   ].map(([c,l,v]) => `

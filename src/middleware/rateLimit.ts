@@ -21,18 +21,28 @@ import {
 //          Previously pro was unlimited despite the upgrade page advertising 20 —
 //          that inconsistency is now fixed.
 
+// ── Tier limits ──────────────────────────────────────────────────────────────
+//
+// Free tier design (deliberate):
+//   - batch:   30/day — unlimited badge scoring is our acquisition hook. Never limit.
+//   - analyze: 0 — AI analysis is the core paid value. Free users see an upgrade teaser.
+//              Backend blocks direct API calls that bypass the panel gate.
+//   - profile: 1/day — enough to set up, creates urgency to upgrade for daily use.
+//
+// Pro/Trial: everything unlimited.
+
 const LIMITS = {
   batch: {
     free: 30,
-    pro:  null,   // unlimited
+    pro:  null,
   },
   analyze: {
-    free: 6,
-    pro:  null,   // unlimited
+    free: 0,      // AI analysis completely locked on free — teaser shown instead
+    pro:  null,
   },
   profile: {
-    free: 3,
-    pro:  20,
+    free: 1,      // 1/day: enough to onboard, creates upgrade friction
+    pro:  null,
   },
 } as const satisfies Record<UsageType, { free: number; pro: number | null }>
 

@@ -10,13 +10,12 @@ import {
 export const subscriptionRouter = Router()
 
 // ── Daily limits reference ─────────────────────────────────────────────────────
-// trial and pro have null panel limits = unlimited.
-// Profile parses: trial gets 20 (same as pro) — matches rateLimit.ts enforcement.
-// The status endpoint must report what is actually enforced, not aspirational values.
+// trial and pro have null limits = unlimited.
+// The extension uses null to know it should not show usage counters.
 const LIMITS = {
-  free:  { panel: 5,    profile: 3  },
-  trial: { panel: null, profile: 20 },
-  pro:   { panel: null, profile: 20 },
+  free:  { panel: 2,    profile: 1  },
+  trial: { panel: null, profile: null },
+  pro:   { panel: null, profile: null },
 } as const
 
 // ── GET /api/subscription/status ───────────────────────────────────────────────
@@ -31,7 +30,6 @@ subscriptionRouter.get('/status', (req: Request, res: Response) => {
   // Calculate trial days remaining for the extension to display
   let trialDaysLeft: number | null = null
   if (tier === 'trial' && device?.trial_started_at) {
-    // Keep in sync with TRIAL_DAYS in database.ts
     const trialEnd = new Date(
       new Date(device.trial_started_at).getTime() + 5 * 24 * 60 * 60 * 1000
     )

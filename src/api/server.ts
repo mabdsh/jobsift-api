@@ -58,7 +58,7 @@ app.get('/admin-panel', (_req, res) => {
 
 // ── Health check ───────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'jobsift-api' })
+  res.json({ ok: true, service: 'rolevance-api' })
 })
 
 // ── API routes ─────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ app.get('/health', (_req, res) => {
 // is consistent across all endpoints and easy to audit in one place:
 //
 //   batch scoring:  30 calls/day free · unlimited pro/trial
-//   deep analysis:  6 calls/day free  · unlimited pro/trial (abuse backstop —
+//   deep analysis:  0 calls/day free  · unlimited pro/trial (abuse backstop —
 //                   legitimate free users never hit this; panel gate blocks at 5)
 //   profile parse:  3 calls/day free  · 20/day pro/trial
 //   panel open:     gated inside panelRouter via recordPanelOpen() in the DB

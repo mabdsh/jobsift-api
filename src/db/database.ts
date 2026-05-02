@@ -5,7 +5,7 @@ import fs               from 'fs'
 import { randomUUID }   from 'crypto'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
-const DB_PATH  = path.join(DATA_DIR, 'jobsift.db')
+const DB_PATH  = path.join(DATA_DIR, 'rolevance.db')
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 export const db = new Database(DB_PATH)
@@ -91,7 +91,7 @@ export function initDatabase(): void {
     `ALTER TABLE devices ADD COLUMN subscription_ends_at TEXT DEFAULT NULL`,
     // trial_started_at: set to datetime('now') on new installs via upsertDevice.
     // Existing devices get backfilled to first_seen below so long-time users
-    // are not accidentally granted a fresh 7-day trial on this deploy.
+    // are not accidentally granted a fresh 5-day trial on this deploy.
     `ALTER TABLE devices ADD COLUMN trial_started_at TEXT DEFAULT NULL`,
   ]
   for (const sql of deviceMigrations) {
@@ -255,7 +255,7 @@ export type EffectiveTier = 'free' | 'pro' | 'trial'
 // Priority order:
 //   1. Admin tier_override → always wins
 //   2. subscriptions_enabled=false → everyone is Pro (launch phase)
-//   3. Within 7-day trial → trial (full access, same as Pro)
+//   3. Within 5-day trial → trial (full access, same as Pro)
 //   4. Active/grace-period paid subscription → pro
 //   5. Everything else → free
 export function getEffectiveTier(deviceId: string): EffectiveTier {

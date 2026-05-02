@@ -89,7 +89,7 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
   const trialUsersNow = (db.prepare(`
     SELECT COUNT(*) as c FROM devices
     WHERE trial_started_at IS NOT NULL
-      AND datetime(trial_started_at, '+7 days') > datetime('now')
+      AND datetime(trial_started_at, '+5 days') > datetime('now')
       AND (tier != 'pro' OR tier IS NULL)
       AND (tier_override IS NULL OR tier_override != 'pro')
   `).get() as any).c
@@ -264,7 +264,7 @@ adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
   const trialActive = (db.prepare(`
     SELECT COUNT(*) as c FROM devices
     WHERE trial_started_at IS NOT NULL
-      AND datetime(trial_started_at, '+7 days') > datetime('now')
+      AND datetime(trial_started_at, '+5 days') > datetime('now')
   `).get() as any).c
 
   res.json({

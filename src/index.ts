@@ -15,7 +15,7 @@ setInterval(cleanupOldLogs, 24 * 60 * 60 * 1000)
 const PORT = process.env.PORT ?? 3000
 
 const server = app.listen(PORT, () => {
-  console.log(`JobSift API running on port ${PORT}`)
+  console.log(`Rolevance API running on port ${PORT}`)
 })
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────

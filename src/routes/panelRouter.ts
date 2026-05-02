@@ -1,4 +1,4 @@
-// JobSift — Panel Open Gate
+// Rolevance — Panel Open Gate
 // Called by the extension before opening any job panel.
 // Always returns HTTP 200 — the extension reads the `allowed` field,
 // not the HTTP status code, to decide what to show.

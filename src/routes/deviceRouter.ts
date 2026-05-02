@@ -1,4 +1,4 @@
-// JobSift — Device Email Endpoint
+// Rolevance — Device Email Endpoint
 // Called by the popup when a user optionally provides their email address.
 // Stores it on the device record so we can send trial-end notifications
 // and support subscription restore by email.

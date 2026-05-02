@@ -1,4 +1,4 @@
-// JobSift — LemonSqueezy Webhook Handler
+// Rolevance — LemonSqueezy Webhook Handler
 // Receives subscription lifecycle events and updates device tier accordingly.
 //
 // IMPORTANT: This route must receive the RAW request body (Buffer), not parsed JSON.

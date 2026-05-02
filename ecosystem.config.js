@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name:                'jobsift-api',
+      name:                'rolevance-api',
       script:              'dist/index.js',
       instances:           1,
       autorestart:         true,

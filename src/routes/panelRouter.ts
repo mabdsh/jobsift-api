@@ -10,9 +10,16 @@ import { recordPanelOpen }           from '../db/database'
 
 export const panelRouter = Router()
 
+// LinkedIn/Indeed job IDs are at most ~20 chars. Cap at 64 as a safe ceiling
+// to prevent a caller sending a multi-MB string that gets written to panel_opens
+// and read back on every panel-count query.
+const MAX_JOB_ID_LENGTH = 64
+
 panelRouter.post('/open', (req: Request, res: Response) => {
   const deviceId = req.deviceId!
-  const jobId    = (typeof req.body.jobId === 'string' ? req.body.jobId : '').trim()
+  const jobId    = (typeof req.body.jobId === 'string' ? req.body.jobId : '')
+    .trim()
+    .slice(0, MAX_JOB_ID_LENGTH)
 
   try {
     const result = recordPanelOpen(deviceId, jobId)

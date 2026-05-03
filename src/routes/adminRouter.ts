@@ -3,29 +3,55 @@ import { db, getSetting, setSetting, setTierOverride, clearRequestLogs } from '.
 
 export const adminRouter = Router()
 
-// ── Brute force protection ─────────────────────────────────────────────────────
+// ── Brute-force protection (SQLite-backed) ────────────────────────────────────
+// Persisted in the settings table so lockouts survive server restarts.
+// Key format: `admin_lockout:<ip>`
+
 const MAX_ATTEMPTS = 5
 const LOCKOUT_MS   = 15 * 60 * 1000
 
 interface AttemptRecord { count: number; lockedUntil: number | null }
-const _failedAttempts = new Map<string, AttemptRecord>()
 
 function getClientIp(req: Request): string {
   return (req.headers['x-real-ip'] as string) || req.ip || 'unknown'
 }
 
+function _getLockout(ip: string): AttemptRecord {
+  try {
+    const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(`admin_lockout:${ip}`) as any
+    if (row?.value) return JSON.parse(row.value) as AttemptRecord
+  } catch {}
+  return { count: 0, lockedUntil: null }
+}
+
+function _setLockout(ip: string, record: AttemptRecord): void {
+  db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(`admin_lockout:${ip}`, JSON.stringify(record))
+}
+
+function _clearLockout(ip: string): void {
+  db.prepare(`DELETE FROM settings WHERE key = ?`).run(`admin_lockout:${ip}`)
+}
+
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const ip     = getClientIp(req)
-  const record = _failedAttempts.get(ip) ?? { count: 0, lockedUntil: null }
+  const record = _getLockout(ip)
 
   if (record.lockedUntil !== null) {
     if (Date.now() < record.lockedUntil) {
       const remaining = Math.ceil((record.lockedUntil - Date.now()) / 60000)
-      res.status(429).json({ error: 'locked_out', message: `Too many failed attempts. Try again in ${remaining} minute${remaining !== 1 ? 's' : ''}.` })
+      res.status(429).json({
+        error:   'locked_out',
+        message: `Too many failed attempts. Try again in ${remaining} minute${remaining !== 1 ? 's' : ''}.`,
+      })
       return
     }
-    _failedAttempts.delete(ip)
-    record.count = 0; record.lockedUntil = null
+    // Lockout expired — clear it
+    _clearLockout(ip)
+    record.count = 0
+    record.lockedUntil = null
   }
 
   const secret = req.headers['x-admin-secret'] as string | undefined
@@ -33,33 +59,34 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
     record.count++
     if (record.count >= MAX_ATTEMPTS) {
       record.lockedUntil = Date.now() + LOCKOUT_MS
-      _failedAttempts.set(ip, record)
+      _setLockout(ip, record)
       console.warn(`[Admin] IP ${ip} locked out after ${MAX_ATTEMPTS} failed attempts`)
-      res.status(429).json({ error: 'locked_out', message: 'Too many failed attempts. Try again in 15 minutes.' })
+      res.status(429).json({
+        error:   'locked_out',
+        message: 'Too many failed attempts. Try again in 15 minutes.',
+      })
     } else {
-      _failedAttempts.set(ip, record)
+      _setLockout(ip, record)
       const left = MAX_ATTEMPTS - record.count
-      res.status(403).json({ error: 'forbidden', message: `Invalid admin secret. ${left} attempt${left !== 1 ? 's' : ''} remaining before lockout.` })
+      res.status(403).json({
+        error:   'forbidden',
+        message: `Invalid admin secret. ${left} attempt${left !== 1 ? 's' : ''} remaining before lockout.`,
+      })
     }
     return
   }
 
-  _failedAttempts.delete(ip)
+  _clearLockout(ip)
   next()
 }
 
 adminRouter.use(requireAdmin)
 
 // ── Date helper ────────────────────────────────────────────────────────────────
-// Computes a YYYY-MM-DD cutoff date N days back from today (UTC).
-// Used to replace SQL string interpolation (`-${days} days`) with a proper
-// parameterized query value, eliminating the SQL injection surface.
-// NOTE: database.ts defines an identical private copy for cleanupOldLogs.
-//       If this helper grows, move both to src/utils/dateUtils.ts.
 function utcDateDaysAgo(daysBack: number): string {
   const d = new Date()
   d.setUTCDate(d.getUTCDate() - daysBack)
-  return d.toISOString().split('T')[0] // → 'YYYY-MM-DD'
+  return d.toISOString().split('T')[0]
 }
 
 // ── GET /admin/stats ───────────────────────────────────────────────────────────
@@ -89,7 +116,7 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
   const trialUsersNow = (db.prepare(`
     SELECT COUNT(*) as c FROM devices
     WHERE trial_started_at IS NOT NULL
-      AND datetime(trial_started_at, '+5 days') > datetime('now')
+      AND datetime(trial_started_at, '+7 days') > datetime('now')
       AND (tier != 'pro' OR tier IS NULL)
       AND (tier_override IS NULL OR tier_override != 'pro')
   `).get() as any).c
@@ -142,9 +169,9 @@ adminRouter.get('/daily', (req: Request, res: Response) => {
 
   const rows = db.prepare(`
     SELECT date,
-      COALESCE(SUM(batch_calls),0)                          as batch,
-      COALESCE(SUM(analyze_calls),0)                        as analyze,
-      COALESCE(SUM(profile_calls),0)                        as profile,
+      COALESCE(SUM(batch_calls),0)                             as batch,
+      COALESCE(SUM(analyze_calls),0)                           as analyze,
+      COALESCE(SUM(profile_calls),0)                           as profile,
       COALESCE(SUM(batch_calls+analyze_calls+profile_calls),0) as total
     FROM usage
     WHERE date >= ?
@@ -207,12 +234,11 @@ adminRouter.get('/logs', (req: Request, res: Response) => {
   const conditions: string[] = []
   const params: any[]        = []
 
-  if (errorsOnly)  { conditions.push('status >= 400') }
-  if (endpoint)    { conditions.push('endpoint = ?'); params.push(endpoint) }
+  if (errorsOnly) { conditions.push('status >= 400') }
+  if (endpoint)   { conditions.push('endpoint = ?'); params.push(endpoint) }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  // LIMIT is parameterized — pass as the final positional param
   const rows = db.prepare(`
     SELECT id, device_id, endpoint, latency_ms, status, error, created_at
     FROM request_logs
@@ -225,7 +251,6 @@ adminRouter.get('/logs', (req: Request, res: Response) => {
 })
 
 // ── DELETE /admin/logs ─────────────────────────────────────────────────────────
-// Clears all rows from request_logs. Irreversible — admin must confirm in UI.
 adminRouter.delete('/logs', (_req: Request, res: Response) => {
   const { deletedCount } = clearRequestLogs()
   res.json({
@@ -237,10 +262,7 @@ adminRouter.delete('/logs', (_req: Request, res: Response) => {
 
 // ── GET /admin/subscription/stats ─────────────────────────────────────────────
 adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
-  const subsEnabled = getSetting('subscriptions_enabled') === 'true'
-
-  // Price per month read from env — single source of truth shared with the
-  // extension's checkout URL. Defaults to 7 if not set.
+  const subsEnabled   = getSetting('subscriptions_enabled') === 'true'
   const pricePerMonth = parseFloat(process.env.PRICE_PER_MONTH || '7')
 
   const tierCounts = db.prepare(`
@@ -264,7 +286,7 @@ adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
   const trialActive = (db.prepare(`
     SELECT COUNT(*) as c FROM devices
     WHERE trial_started_at IS NOT NULL
-      AND datetime(trial_started_at, '+5 days') > datetime('now')
+      AND datetime(trial_started_at, '+7 days') > datetime('now')
   `).get() as any).c
 
   res.json({

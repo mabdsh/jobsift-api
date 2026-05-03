@@ -1,16 +1,39 @@
 import dotenv from 'dotenv'
 dotenv.config()
 
-import { app }                          from './api/server'
-import { initDatabase, cleanupOldLogs, db } from './db/database'
+// ── Startup env-var validation ─────────────────────────────────────────────────
+// Fail loudly before touching the DB or starting the HTTP server.
+// A missing var causes silent mid-request failures that are hard to debug.
+const REQUIRED_VARS = [
+  'GROQ_API_KEY',
+  'CLIENT_SECRET',
+  'ADMIN_SECRET',
+  'LEMONSQUEEZY_SIGNING_SECRET',
+]
+const missing = REQUIRED_VARS.filter(k => !process.env[k]?.trim())
+if (missing.length) {
+  console.error('[Startup] Missing required environment variables:', missing.join(', '))
+  console.error('[Startup] Copy .env.example to .env and fill in all values.')
+  process.exit(1)
+}
+
+import { app }                                           from './api/server'
+import { initDatabase, cleanupOldLogs, expireStaleSubscriptions, db } from './db/database'
 
 initDatabase()
 
-// ── Log cleanup schedule ───────────────────────────────────────────────────────
-// Run immediately on startup (catches backlog from any downtime),
-// then every 24 hours. Cleans both request_logs and panel_opens.
+// ── Maintenance jobs ───────────────────────────────────────────────────────────
+// Run immediately on startup (catches any backlog from downtime),
+// then on a repeating schedule.
+
+// Log + usage row cleanup — daily
 cleanupOldLogs()
 setInterval(cleanupOldLogs, 24 * 60 * 60 * 1000)
+
+// Subscription expiry enforcement — hourly safety net.
+// If LemonSqueezy fails to deliver subscription_expired, this catches it.
+expireStaleSubscriptions()
+setInterval(expireStaleSubscriptions, 60 * 60 * 1000)
 
 const PORT = process.env.PORT ?? 3000
 
@@ -18,12 +41,17 @@ const server = app.listen(PORT, () => {
   console.log(`Rolevance API running on port ${PORT}`)
 })
 
+// ── Port conflict handling ─────────────────────────────────────────────────────
+server.on('error', (err: any) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[Startup] Port ${PORT} already in use — is another instance running?`)
+    console.error('[Startup] Run: pm2 delete rolevance-api  then try again.')
+    process.exit(1)
+  }
+  throw err
+})
+
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
-// Stops accepting new connections, lets in-flight requests complete (10s max),
-// then closes the SQLite database cleanly before exiting.
-// Without this, a SIGTERM from PM2 or the OS could interrupt in-flight
-// SQLite writes — WAL mode reduces corruption risk but responses would be
-// dropped mid-flight with no reply to the client.
 function shutdown(signal: string): void {
   console.log(`[Shutdown] ${signal} received — closing gracefully…`)
 
@@ -37,11 +65,10 @@ function shutdown(signal: string): void {
     process.exit(0)
   })
 
-  // Force exit if connections don't drain within 10 seconds
   setTimeout(() => {
     console.error('[Shutdown] Forced exit after 10s — connections did not drain')
     process.exit(1)
-  }, 10_000).unref() // .unref() so the timer doesn't keep Node alive on its own
+  }, 10_000).unref()
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'))

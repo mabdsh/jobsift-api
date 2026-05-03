@@ -1,50 +1,13 @@
 import { Request, Response, NextFunction } from 'express'
 import {
-  getUsageToday, incrementUsage, UsageType,
+  getUsageToday, incrementUsage, UsageType, EffectiveTier,
   isSubscriptionsEnabled, getEffectiveTier
 } from '../db/database'
+import { CALL_LIMITS } from '../config/limits'
 
-// ── Limits ────────────────────────────────────────────────────────────────────
-//
-// batch:   Primary Groq spend control for free users. 30 calls ≈ 750 jobs/day —
-//          covers a serious job hunter scrolling 2–3 full pages. Pro/Trial get
-//          null (unlimited) because the panel gate doesn't cap batch scoring.
-//
-// analyze: Set one above the panel gate (5/day) so legitimate free users never
-//          see this limit — the panel gate blocks them at 5 panels first.
-//          This is a backend-only abuse backstop against direct API calls that
-//          bypass the panel gate entirely (e.g. someone who extracted the client
-//          secret and is looping /api/analyze/job directly).
-//          Pro/Trial: null (unlimited — matches unlimited panels).
-//
-// profile: User-facing limit shown in the popup. 3/day free, 20/day pro.
-//          Previously pro was unlimited despite the upgrade page advertising 20 —
-//          that inconsistency is now fixed.
-
-// ── Tier limits ──────────────────────────────────────────────────────────────
-//
-// Free tier design (deliberate):
-//   - batch:   30/day — unlimited badge scoring is our acquisition hook. Never limit.
-//   - analyze: 0 — AI analysis is the core paid value. Free users see an upgrade teaser.
-//              Backend blocks direct API calls that bypass the panel gate.
-//   - profile: 1/day — enough to set up, creates urgency to upgrade for daily use.
-//
-// Pro/Trial: everything unlimited.
-
-const LIMITS = {
-  batch: {
-    free: 30,
-    pro:  null,
-  },
-  analyze: {
-    free: 0,      // AI analysis completely locked on free — teaser shown instead
-    pro:  null,
-  },
-  profile: {
-    free: 1,      // 1/day: enough to onboard, creates upgrade friction
-    pro:  null,
-  },
-} as const satisfies Record<UsageType, { free: number; pro: number | null }>
+// ── Limit resolution ──────────────────────────────────────────────────────────
+// All numbers live in src/config/limits.ts — never hardcode values here.
+// null = unlimited for that tier + type combination.
 
 function nextMidnightUTC(): string {
   const d = new Date()
@@ -52,7 +15,6 @@ function nextMidnightUTC(): string {
   return d.toISOString()
 }
 
-// Maps UsageType → the matching field name in UsageRow
 function usageField(
   type: UsageType
 ): 'batch_calls' | 'analyze_calls' | 'profile_calls' {
@@ -61,12 +23,13 @@ function usageField(
   return 'profile_calls'
 }
 
-function limitMessage(type: UsageType, limit: number): string {
-  if (type === 'batch')
-    return `Daily scoring limit (${limit} batches) reached. Upgrade to Pro for unlimited scoring.`
-  if (type === 'analyze')
-    return `Daily analysis limit (${limit}) reached. Upgrade to Pro for unlimited analysis.`
-  return `Daily profile parse limit (${limit}) reached. Upgrade to Pro for 20 per day.`
+function limitMessage(type: UsageType, limit: number, tier: EffectiveTier = 'free'): string {
+  const suffix = tier === 'trial'
+    ? ` Resets at midnight UTC.`
+    : ` Upgrade to Pro for unlimited access.`
+  if (type === 'batch')   return `Daily scoring limit (${limit} batches) reached.${suffix}`
+  if (type === 'analyze') return `Daily analysis limit (${limit}) reached.${suffix}`
+  return `Daily profile parse limit (${limit}) reached.${suffix}`
 }
 
 export function checkRateLimit(type: UsageType) {
@@ -74,7 +37,7 @@ export function checkRateLimit(type: UsageType) {
     const deviceId = req.deviceId
     if (!deviceId) { res.status(401).json({ error: 'unauthorized' }); return }
 
-    // Subscriptions disabled globally → everyone is effectively Pro, no limits
+    // Subscriptions disabled globally → everyone is effectively Pro
     if (!isSubscriptionsEnabled()) {
       incrementUsage(deviceId, type)
       next()
@@ -82,33 +45,29 @@ export function checkRateLimit(type: UsageType) {
     }
 
     const tier  = getEffectiveTier(deviceId)
-    const isFree = tier === 'free'
+    const limit: number | null =
+      tier === 'free'  ? CALL_LIMITS[type].free  :
+      tier === 'trial' ? CALL_LIMITS[type].trial :
+                         CALL_LIMITS[type].pro
 
-    // ── Determine applicable limit ─────────────────────────────────────────
-    // null means unlimited for this tier+type combination
-    const limit: number | null = isFree
-      ? LIMITS[type].free
-      : LIMITS[type].pro    // pro and trial share the same pro limits
-
+    // Unlimited — still increment for analytics
     if (limit === null) {
-      // Unlimited — still increment for analytics, then pass through
       incrementUsage(deviceId, type)
       next()
       return
     }
 
-    // ── Check daily usage against limit ────────────────────────────────────
     const usage = getUsageToday(deviceId)
     const used  = usage[usageField(type)]
 
     if (used >= limit) {
       res.status(429).json({
-        error:         'rate_limit_exceeded',
-        message:       limitMessage(type, limit),
+        error:         tier === 'trial' ? 'trial_daily_limit' : 'rate_limit_exceeded',
+        message:       limitMessage(type, limit, tier),
         limit,
         used,
         tier,
-        needs_upgrade: isFree,   // only prompt upgrade for free users
+        needs_upgrade: tier === 'free',
         reset_at:      nextMidnightUTC(),
       })
       return

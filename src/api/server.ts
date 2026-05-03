@@ -1,4 +1,4 @@
-import express  from 'express'
+import express, { Request, Response, NextFunction } from 'express'
 import cors     from 'cors'
 import path     from 'path'
 
@@ -12,18 +12,15 @@ import { panelRouter        } from '../routes/panelRouter'
 import { adminRouter        } from '../routes/adminRouter'
 import { webhookRouter      } from '../routes/webhookRouter'
 import { subscriptionRouter } from '../routes/subscriptionRouter'
+import { trialRouter        } from '../routes/trialRouter'
 import { deviceRouter       } from '../routes/deviceRouter'
 
 export const app = express()
 
 // ── Trust proxy ────────────────────────────────────────────────────────────────
-// Tells Express to trust X-Forwarded-For / X-Real-IP set by Nginx.
-// Without this, req.ip is always 127.0.0.1 (Nginx loopback).
 app.set('trust proxy', 1)
 
 // ── Webhook — MUST come before express.json() ──────────────────────────────────
-// LemonSqueezy webhook verification requires the raw request body (Buffer).
-// Registering before express.json() ensures it gets express.raw() instead.
 app.use(
   '/webhook/lemonsqueezy',
   express.raw({ type: 'application/json' }),
@@ -62,26 +59,33 @@ app.get('/health', (_req, res) => {
 })
 
 // ── API routes ─────────────────────────────────────────────────────────────────
-//
-// Rate limits applied here in middleware, not inside routers, so the pattern
-// is consistent across all endpoints and easy to audit in one place:
-//
-//   batch scoring:  30 calls/day free · unlimited pro/trial
-//   deep analysis:  0 calls/day free  · unlimited pro/trial (abuse backstop —
-//                   legitimate free users never hit this; panel gate blocks at 5)
-//   profile parse:  3 calls/day free  · 20/day pro/trial
-//   panel open:     gated inside panelRouter via recordPanelOpen() in the DB
-//                   (handles same-job free re-open logic)
-
 app.use('/api/score',        requireDevice, checkRateLimit('batch'),   scoreRouter)
 app.use('/api/analyze',      requireDevice, checkRateLimit('analyze'), analyzeRouter)
 app.use('/api/profile',      requireDevice, checkRateLimit('profile'), profileRouter)
 app.use('/api/panel',        requireDevice, panelRouter)
 app.use('/api/subscription', requireDevice, subscriptionRouter)
+app.use('/api/trial',        requireDevice, trialRouter)
 app.use('/api/device',       requireDevice, deviceRouter)
 
 // ── Admin API ──────────────────────────────────────────────────────────────────
 app.use('/admin', adminRouter)
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
-app.use((_req, res) => { res.status(404).json({ error: 'not_found' }) })
+app.use((_req, res) => {
+  res.status(404).json({ error: 'not_found' })
+})
+
+// ── Global error handler ───────────────────────────────────────────────────────
+// Catches any error thrown by routes or middleware (sync or async in Express 5).
+// Prevents stack traces from leaking to clients and ensures every uncaught
+// error returns a clean JSON response rather than a silent 500.
+// Must be registered LAST — after all routes and the 404 handler.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[Unhandled]', err)
+  const status = err?.status ?? err?.statusCode ?? 500
+  res.status(status).json({
+    error:   'internal_error',
+    message: 'An unexpected error occurred. Please try again.',
+  })
+})

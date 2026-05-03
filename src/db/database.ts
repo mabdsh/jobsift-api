@@ -3,15 +3,13 @@ import type { Statement } from 'better-sqlite3'
 import path             from 'path'
 import fs               from 'fs'
 import { randomUUID }   from 'crypto'
+import { TRIAL_DAYS, PANEL_LIMITS } from '../config/limits'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DB_PATH  = path.join(DATA_DIR, 'rolevance.db')
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 export const db = new Database(DB_PATH)
-
-const TRIAL_DAYS       = 5
-const FREE_PANEL_LIMIT = 5
 
 export function initDatabase(): void {
   db.pragma('journal_mode = WAL')
@@ -39,10 +37,9 @@ export function initDatabase(): void {
   `)
 
   // ── panel_opens ────────────────────────────────────────────────────────────
-  // Tracks unique job panel opens per device per day.
-  // The composite PRIMARY KEY (device_id, date, job_id) is the uniqueness
-  // constraint — INSERT OR IGNORE on a duplicate is a silent no-op,
-  // so the same job opened twice on the same day costs only one slot.
+  // Composite PK (device_id, date, job_id) is the uniqueness constraint —
+  // INSERT OR IGNORE on duplicate is a silent no-op so same job re-opened
+  // on the same day costs only one slot.
   db.exec(`
     CREATE TABLE IF NOT EXISTS panel_opens (
       device_id TEXT NOT NULL,
@@ -74,14 +71,15 @@ export function initDatabase(): void {
     )
   `)
 
-  // ── Indexes ───────────────────────────────────────────────────────────────
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_date   ON usage (date)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_created ON request_logs (created_at)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_device  ON request_logs (device_id)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_status  ON request_logs (status)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_panel_device ON panel_opens (device_id, date)`)
+  // ── indexes ───────────────────────────────────────────────────────────────
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_date    ON usage (date)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_created  ON request_logs (created_at)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_device   ON request_logs (device_id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_status   ON request_logs (status)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_panel_device  ON panel_opens (device_id, date)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_devices_email ON devices (email)`)
 
-  // ── Migrations ────────────────────────────────────────────────────────────
+  // ── migrations ────────────────────────────────────────────────────────────
   const deviceMigrations = [
     `ALTER TABLE devices ADD COLUMN email                TEXT DEFAULT NULL`,
     `ALTER TABLE devices ADD COLUMN tier                 TEXT DEFAULT 'free'`,
@@ -89,33 +87,32 @@ export function initDatabase(): void {
     `ALTER TABLE devices ADD COLUMN subscription_id      TEXT DEFAULT NULL`,
     `ALTER TABLE devices ADD COLUMN subscription_status  TEXT DEFAULT NULL`,
     `ALTER TABLE devices ADD COLUMN subscription_ends_at TEXT DEFAULT NULL`,
-    // trial_started_at: set to datetime('now') on new installs via upsertDevice.
-    // Existing devices get backfilled to first_seen below so long-time users
-    // are not accidentally granted a fresh 5-day trial on this deploy.
-    `ALTER TABLE devices ADD COLUMN trial_started_at TEXT DEFAULT NULL`,
+    `ALTER TABLE devices ADD COLUMN trial_started_at     TEXT DEFAULT NULL`,
   ]
   for (const sql of deviceMigrations) {
     try { db.exec(sql) } catch { /* column already exists */ }
   }
 
-  // Backfill existing devices — trial started when they first installed
-  db.exec(`
-    UPDATE devices SET trial_started_at = first_seen
-    WHERE trial_started_at IS NULL
-  `)
-
-  // ── Seed default settings ─────────────────────────────────────────────────
+  // ── seed default settings ─────────────────────────────────────────────────
+  // subscriptions_enabled defaults to TRUE — we launch with subscriptions on.
+  // Free users must buy Pro or activate a trial to get full access.
   const subRow = db.prepare(`SELECT value FROM settings WHERE key = 'subscriptions_enabled'`).get()
   if (!subRow) {
-    db.prepare(`INSERT INTO settings (key, value) VALUES ('subscriptions_enabled', 'false')`).run()
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('subscriptions_enabled', 'true')`).run()
   }
 
   _initStatements()
   console.log('Database initialized')
 }
 
-// ── Prepared statements ───────────────────────────────────────────────────────
+// ── Prepared statement guard ──────────────────────────────────────────────────
+// Throws clearly if initDatabase() was not called before first use.
+// Replaces silent optional-chaining (?.) no-ops.
 type Stmt = Statement<unknown[]>
+function _stmt(s: Stmt | null, label: string): Stmt {
+  if (!s) throw new Error(`DB not initialized — statement "${label}" is null. Call initDatabase() first.`)
+  return s
+}
 
 let stmtUpsertDevice: Stmt | null = null
 let stmtGetUsage:     Stmt | null = null
@@ -128,9 +125,8 @@ let stmtPanelExists:  Stmt | null = null
 let stmtPanelInsert:  Stmt | null = null
 
 function _initStatements(): void {
-  // trial_started_at set only on first INSERT — ON CONFLICT only bumps last_seen
   stmtUpsertDevice = db.prepare(`
-    INSERT INTO devices (id, trial_started_at) VALUES (?, datetime('now'))
+    INSERT INTO devices (id) VALUES (?)
     ON CONFLICT(id) DO UPDATE SET last_seen = datetime('now')
   `)
 
@@ -178,7 +174,7 @@ function _initStatements(): void {
 // ── Device helpers ────────────────────────────────────────────────────────────
 
 export function upsertDevice(id: string): void {
-  stmtUpsertDevice?.run(id)
+  _stmt(stmtUpsertDevice, 'upsertDevice').run(id)
 }
 
 export interface UsageRow {
@@ -188,20 +184,20 @@ export interface UsageRow {
 }
 
 export function getUsageToday(deviceId: string): UsageRow {
-  const row = stmtGetUsage?.get(deviceId) as UsageRow | undefined
+  const row = _stmt(stmtGetUsage, 'getUsage').get(deviceId) as UsageRow | undefined
   return row ?? { batch_calls: 0, analyze_calls: 0, profile_calls: 0 }
 }
 
 export type UsageType = 'batch' | 'analyze' | 'profile'
 
 export function incrementUsage(deviceId: string, type: UsageType): void {
-  if (type === 'batch')   stmtIncrBatch?.run(deviceId)
-  if (type === 'analyze') stmtIncrAnalyze?.run(deviceId)
-  if (type === 'profile') stmtIncrProfile?.run(deviceId)
+  if (type === 'batch')   _stmt(stmtIncrBatch,   'incrBatch').run(deviceId)
+  if (type === 'analyze') _stmt(stmtIncrAnalyze, 'incrAnalyze').run(deviceId)
+  if (type === 'profile') _stmt(stmtIncrProfile, 'incrProfile').run(deviceId)
 }
 
 export function getTodayPanelOpenCount(deviceId: string): number {
-  const row = stmtPanelCount?.get(deviceId) as { c: number } | undefined
+  const row = _stmt(stmtPanelCount, 'panelCount').get(deviceId) as { c: number } | undefined
   return row?.c ?? 0
 }
 
@@ -215,7 +211,7 @@ export interface LogEntry {
 
 export function logRequest(entry: LogEntry): void {
   try {
-    stmtInsertLog?.run({
+    _stmt(stmtInsertLog, 'insertLog').run({
       id:        randomUUID(),
       deviceId:  entry.deviceId ?? null,
       endpoint:  entry.endpoint,
@@ -238,8 +234,10 @@ export function getSetting(key: string): string | null {
 }
 
 export function setSetting(key: string, value: string): void {
-  db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value)
+  db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value)
 }
 
 export function isSubscriptionsEnabled(): boolean {
@@ -248,14 +246,14 @@ export function isSubscriptionsEnabled(): boolean {
 
 // ── Tier helpers ──────────────────────────────────────────────────────────────
 
-export type StoredTier   = 'free' | 'pro'
+export type StoredTier    = 'free' | 'pro'
 export type EffectiveTier = 'free' | 'pro' | 'trial'
 
 // Returns the tier enforced right now for this device.
 // Priority order:
 //   1. Admin tier_override → always wins
-//   2. subscriptions_enabled=false → everyone is Pro (launch phase)
-//   3. Within 5-day trial → trial (full access, same as Pro)
+//   2. subscriptions_enabled=false → everyone is Pro (admin override mode)
+//   3. Within 7-day trial → trial (full access, same as Pro)
 //   4. Active/grace-period paid subscription → pro
 //   5. Everything else → free
 export function getEffectiveTier(deviceId: string): EffectiveTier {
@@ -288,12 +286,12 @@ export function getEffectiveTier(deviceId: string): EffectiveTier {
 
 export interface PanelOpenResult {
   allowed:       boolean
-  alreadyOpened: boolean      // true = same jobId already opened today (free re-open)
-  usedToday:     number       // unique panels opened today (free tier only)
-  limit:         number | null // null = unlimited (pro/trial)
+  alreadyOpened: boolean
+  usedToday:     number
+  limit:         number | null
   trial:         boolean
   trialDaysLeft: number | null
-  resetAt:       string | null // ISO midnight UTC — present when not allowed
+  resetAt:       string | null
   needs_upgrade: boolean
 }
 
@@ -311,21 +309,11 @@ function _trialDaysLeft(trialStartedAt: string): number {
 export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResult {
   const tier   = getEffectiveTier(deviceId)
   const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
+  const limit  = PANEL_LIMITS[tier]
 
-  // ── Trial: unlimited access, still record for analytics ───────────────────
-  if (tier === 'trial') {
-    stmtPanelInsert?.run(deviceId, jobId || randomUUID())
-    return {
-      allowed: true, alreadyOpened: false, usedToday: 0,
-      limit: null, trial: true,
-      trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
-      resetAt: null, needs_upgrade: false,
-    }
-  }
-
-  // ── Pro: unlimited access, record for analytics ───────────────────────────
+  // ── Pro: unlimited, record for analytics ──────────────────────────────────
   if (tier === 'pro') {
-    stmtPanelInsert?.run(deviceId, jobId || randomUUID())
+    _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
     return {
       allowed: true, alreadyOpened: false, usedToday: 0,
       limit: null, trial: false, trialDaysLeft: null,
@@ -333,16 +321,16 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
     }
   }
 
-  // ── Free tier ─────────────────────────────────────────────────────────────
-
-  // Same job already opened today = free re-open, doesn't cost a slot
+  // ── Trial & Free: check same-job re-open (free slot) ─────────────────────
   if (jobId) {
-    const exists = stmtPanelExists?.get(deviceId, jobId)
+    const exists = _stmt(stmtPanelExists, 'panelExists').get(deviceId, jobId)
     if (exists) {
       return {
         allowed: true, alreadyOpened: true,
         usedToday: getTodayPanelOpenCount(deviceId),
-        limit: FREE_PANEL_LIMIT, trial: false, trialDaysLeft: null,
+        limit,
+        trial:        tier === 'trial',
+        trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
         resetAt: null, needs_upgrade: false,
       }
     }
@@ -350,21 +338,26 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
 
   const usedToday = getTodayPanelOpenCount(deviceId)
 
-  // Limit hit
-  if (usedToday >= FREE_PANEL_LIMIT) {
+  // ── Limit hit ─────────────────────────────────────────────────────────────
+  if (limit !== null && usedToday >= limit) {
     return {
       allowed: false, alreadyOpened: false, usedToday,
-      limit: FREE_PANEL_LIMIT, trial: false, trialDaysLeft: null,
-      resetAt: _nextMidnightUTC(), needs_upgrade: isSubscriptionsEnabled(),
+      limit,
+      trial:        tier === 'trial',
+      trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
+      resetAt: _nextMidnightUTC(),
+      needs_upgrade: isSubscriptionsEnabled(),
     }
   }
 
-  // Within limit — record and allow
-  stmtPanelInsert?.run(deviceId, jobId || randomUUID())
+  // ── Within limit — record and allow ──────────────────────────────────────
+  _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
 
   return {
     allowed: true, alreadyOpened: false, usedToday: usedToday + 1,
-    limit: FREE_PANEL_LIMIT, trial: false, trialDaysLeft: null,
+    limit,
+    trial:        tier === 'trial',
+    trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
     resetAt: null, needs_upgrade: false,
   }
 }
@@ -408,14 +401,66 @@ export function setTierOverride(deviceId: string, override: 'pro' | null): void 
   db.prepare(`UPDATE devices SET tier_override = ? WHERE id = ?`).run(override, deviceId)
 }
 
+// ── Trial activation ──────────────────────────────────────────────────────────
+// Returns:
+//   'activated'     — trial freshly started
+//   'already_active' — this device already has a trial (or has had one)
+//   'email_used'    — this email was already used for a trial on another device
+
+export type TrialActivationResult = 'activated' | 'already_active' | 'email_used'
+
+export function activateTrial(deviceId: string, email: string): TrialActivationResult {
+  const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
+  if (!device || device.trial_started_at) return 'already_active'
+
+  // One trial per email address — prevents unlimited trials via reinstall.
+  // We check all devices that have ever used this email, not just the current one.
+  const previousTrial = db.prepare(`
+    SELECT 1 FROM devices
+    WHERE LOWER(email) = LOWER(?) AND trial_started_at IS NOT NULL
+  `).get(email)
+  if (previousTrial) return 'email_used'
+
+  db.prepare(`
+    UPDATE devices SET
+      trial_started_at = datetime('now'),
+      email            = COALESCE(?, email)
+    WHERE id = ?
+  `).run(email, deviceId)
+
+  return 'activated'
+}
+
+// ── Subscription expiry enforcement ──────────────────────────────────────────
+// Demotes cancelled subscriptions whose billing period has ended.
+// Runs on startup and hourly from index.ts as a server-side safety net —
+// if LemonSqueezy fails to deliver the subscription_expired webhook, this
+// catches the expiry and prevents free access continuing indefinitely.
+export function expireStaleSubscriptions(): void {
+  try {
+    const result = db.prepare(`
+      UPDATE devices SET
+        tier                = 'free',
+        subscription_status = 'expired'
+      WHERE tier = 'pro'
+        AND subscription_status = 'cancelled'
+        AND subscription_ends_at IS NOT NULL
+        AND datetime(subscription_ends_at) < datetime('now')
+    `).run()
+    if (result.changes > 0) {
+      console.log(`[Expiry] Downgraded ${result.changes} cancelled subscription(s) to free tier`)
+    }
+  } catch (err) {
+    console.error('[Expiry] Failed to expire stale subscriptions:', err)
+  }
+}
+
 // ── Log cleanup ───────────────────────────────────────────────────────────────
 // Called on startup and every 24 hours from index.ts.
-// Cleans both request_logs and panel_opens older than 30 days.
+// Cleans request_logs, panel_opens, and usage rows older than 30 days.
 
 const LOG_RETENTION_DAYS = 30
 
-// Returns a YYYY-MM-DD date string N days back from today (UTC).
-// Used for parameterized queries — avoids string interpolation in SQL.
 function utcDateDaysAgo(daysBack: number): string {
   const d = new Date()
   d.setUTCDate(d.getUTCDate() - daysBack)
@@ -427,16 +472,20 @@ export function cleanupOldLogs(): void {
     const cutoff = utcDateDaysAgo(LOG_RETENTION_DAYS)
     const logs   = db.prepare(`DELETE FROM request_logs WHERE created_at < ?`).run(cutoff)
     const panels = db.prepare(`DELETE FROM panel_opens   WHERE date        < ?`).run(cutoff)
-    const total  = logs.changes + panels.changes
+    const usage  = db.prepare(`DELETE FROM usage         WHERE date        < ?`).run(cutoff)
+    const total  = logs.changes + panels.changes + usage.changes
     if (total > 0) {
-      console.log(`[Cleanup] Pruned ${logs.changes} log rows + ${panels.changes} panel_open rows`)
+      console.log(
+        `[Cleanup] Pruned ${logs.changes} log rows + ` +
+        `${panels.changes} panel_open rows + ` +
+        `${usage.changes} usage rows`
+      )
     }
   } catch (err) {
     console.error('[Cleanup] Failed:', err)
   }
 }
 
-// Clears all rows from request_logs immediately. Called by DELETE /admin/logs.
 export function clearRequestLogs(): { deletedCount: number } {
   try {
     const result = db.prepare(`DELETE FROM request_logs`).run()

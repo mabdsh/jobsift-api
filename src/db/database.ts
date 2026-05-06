@@ -3,7 +3,7 @@ import type { Statement } from 'better-sqlite3'
 import path             from 'path'
 import fs               from 'fs'
 import { randomUUID }   from 'crypto'
-import { TRIAL_DAYS, PANEL_LIMITS } from '../config/limits'
+import { TRIAL_DAYS, PANEL_LIMITS, PAST_DUE_GRACE_DAYS, UsageType } from '../config/limits'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DB_PATH  = path.join(DATA_DIR, 'rolevance.db')
@@ -25,11 +25,13 @@ export function initDatabase(): void {
   `)
 
   // ── usage ─────────────────────────────────────────────────────────────────
+  // jobs_scored counts individual job cards scored (not API batch calls).
+  // analyze_calls and profile_calls remain 1:1 with API calls.
   db.exec(`
     CREATE TABLE IF NOT EXISTS usage (
       device_id     TEXT NOT NULL REFERENCES devices(id),
       date          TEXT NOT NULL DEFAULT (date('now')),
-      batch_calls   INTEGER NOT NULL DEFAULT 0,
+      jobs_scored   INTEGER NOT NULL DEFAULT 0,
       analyze_calls INTEGER NOT NULL DEFAULT 0,
       profile_calls INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (device_id, date)
@@ -77,7 +79,8 @@ export function initDatabase(): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_device   ON request_logs (device_id)`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_status   ON request_logs (status)`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_panel_device  ON panel_opens (device_id, date)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_devices_email ON devices (email)`)
+  // NOTE: idx_devices_email is created AFTER the migrations below — the `email`
+  // column doesn't exist on a fresh install until the ALTER TABLE runs.
 
   // ── migrations ────────────────────────────────────────────────────────────
   const deviceMigrations = [
@@ -88,10 +91,36 @@ export function initDatabase(): void {
     `ALTER TABLE devices ADD COLUMN subscription_status  TEXT DEFAULT NULL`,
     `ALTER TABLE devices ADD COLUMN subscription_ends_at TEXT DEFAULT NULL`,
     `ALTER TABLE devices ADD COLUMN trial_started_at     TEXT DEFAULT NULL`,
+    `ALTER TABLE devices ADD COLUMN past_due_at          TEXT DEFAULT NULL`,
   ]
   for (const sql of deviceMigrations) {
     try { db.exec(sql) } catch { /* column already exists */ }
   }
+
+  // Rename batch_calls → jobs_scored on existing databases.
+  // Fresh installs: CREATE TABLE above already uses jobs_scored, so this
+  // ALTER fails silently because there's no batch_calls column.
+  // Existing installs: this rename preserves all historical data (note that
+  // legacy values represent batch counts, not job counts — semantically
+  // misleading but only affects pre-migration analytics rows).
+  try {
+    db.exec(`ALTER TABLE usage RENAME COLUMN batch_calls TO jobs_scored`)
+  } catch { /* already renamed or column never existed */ }
+
+  // Sanity check — fail loudly at startup if jobs_scored isn't present,
+  // rather than silently breaking every INSERT downstream.
+  try {
+    db.prepare(`SELECT jobs_scored FROM usage LIMIT 0`).all()
+  } catch (err) {
+    throw new Error(
+      `[Startup] usage.jobs_scored column missing — schema migration failed. ` +
+      `Run manually: ALTER TABLE usage RENAME COLUMN batch_calls TO jobs_scored`
+    )
+  }
+
+  // Index on devices.email — must come AFTER the migration loop, since
+  // `email` doesn't exist on a fresh DB until the ALTER TABLE runs above.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_devices_email ON devices (email)`)
 
   // ── seed default settings ─────────────────────────────────────────────────
   // subscriptions_enabled defaults to TRUE — we launch with subscriptions on.
@@ -116,7 +145,7 @@ function _stmt(s: Stmt | null, label: string): Stmt {
 
 let stmtUpsertDevice: Stmt | null = null
 let stmtGetUsage:     Stmt | null = null
-let stmtIncrBatch:    Stmt | null = null
+let stmtIncrScore:    Stmt | null = null
 let stmtIncrAnalyze:  Stmt | null = null
 let stmtIncrProfile:  Stmt | null = null
 let stmtInsertLog:    Stmt | null = null
@@ -131,24 +160,27 @@ function _initStatements(): void {
   `)
 
   stmtGetUsage = db.prepare(`
-    SELECT batch_calls, analyze_calls, profile_calls
+    SELECT jobs_scored, analyze_calls, profile_calls
     FROM   usage
     WHERE  device_id = ? AND date = date('now')
   `)
 
-  stmtIncrBatch = db.prepare(`
-    INSERT INTO usage (device_id, batch_calls) VALUES (?, 1)
-    ON CONFLICT(device_id, date) DO UPDATE SET batch_calls = batch_calls + 1
+  // Each increment statement takes (device_id, count). The ON CONFLICT path
+  // adds the same `excluded.<col>` value, so a fresh row inserts `count`
+  // and an existing row adds `count` to whatever's already there.
+  stmtIncrScore = db.prepare(`
+    INSERT INTO usage (device_id, jobs_scored) VALUES (?, ?)
+    ON CONFLICT(device_id, date) DO UPDATE SET jobs_scored = jobs_scored + excluded.jobs_scored
   `)
 
   stmtIncrAnalyze = db.prepare(`
-    INSERT INTO usage (device_id, analyze_calls) VALUES (?, 1)
-    ON CONFLICT(device_id, date) DO UPDATE SET analyze_calls = analyze_calls + 1
+    INSERT INTO usage (device_id, analyze_calls) VALUES (?, ?)
+    ON CONFLICT(device_id, date) DO UPDATE SET analyze_calls = analyze_calls + excluded.analyze_calls
   `)
 
   stmtIncrProfile = db.prepare(`
-    INSERT INTO usage (device_id, profile_calls) VALUES (?, 1)
-    ON CONFLICT(device_id, date) DO UPDATE SET profile_calls = profile_calls + 1
+    INSERT INTO usage (device_id, profile_calls) VALUES (?, ?)
+    ON CONFLICT(device_id, date) DO UPDATE SET profile_calls = profile_calls + excluded.profile_calls
   `)
 
   stmtInsertLog = db.prepare(`
@@ -178,22 +210,66 @@ export function upsertDevice(id: string): void {
 }
 
 export interface UsageRow {
-  batch_calls:   number
+  jobs_scored:   number
   analyze_calls: number
   profile_calls: number
 }
 
 export function getUsageToday(deviceId: string): UsageRow {
   const row = _stmt(stmtGetUsage, 'getUsage').get(deviceId) as UsageRow | undefined
-  return row ?? { batch_calls: 0, analyze_calls: 0, profile_calls: 0 }
+  return row ?? { jobs_scored: 0, analyze_calls: 0, profile_calls: 0 }
 }
 
-export type UsageType = 'batch' | 'analyze' | 'profile'
+// Re-export so callers don't have to import from two places.
+export type { UsageType } from '../config/limits'
+import type { UsageType as _UsageType } from '../config/limits'
 
-export function incrementUsage(deviceId: string, type: UsageType): void {
-  if (type === 'batch')   _stmt(stmtIncrBatch,   'incrBatch').run(deviceId)
-  if (type === 'analyze') _stmt(stmtIncrAnalyze, 'incrAnalyze').run(deviceId)
-  if (type === 'profile') _stmt(stmtIncrProfile, 'incrProfile').run(deviceId)
+// `by` defaults to 1 — most callers (analyze, profile) increment by one per
+// API call. Score is special: one /api/score/batch call scores N jobs, so
+// the route handler passes by = jobs.length.
+export function incrementUsage(deviceId: string, type: _UsageType, by: number = 1): void {
+  if (by < 1) return
+  if (type === 'score')   _stmt(stmtIncrScore,   'incrScore').run(deviceId, by)
+  if (type === 'analyze') _stmt(stmtIncrAnalyze, 'incrAnalyze').run(deviceId, by)
+  if (type === 'profile') _stmt(stmtIncrProfile, 'incrProfile').run(deviceId, by)
+}
+
+// ── Atomic limit-check + increment ───────────────────────────────────────────
+// Used by rateLimit.ts to avoid the read-then-write race where two concurrent
+// requests both observe `used == limit - 1` and both increment, exceeding the
+// limit. The whole check + increment runs in a single SQLite transaction.
+//
+// `limit === null` means unlimited — we still increment (for analytics) and
+// always allow. Caller is responsible for resolving the tier-specific limit
+// from CALL_LIMITS before invoking.
+export interface ConsumeUsageResult {
+  allowed: boolean
+  used:    number   // post-increment when allowed; current count when blocked
+  limit:   number | null
+}
+
+export function tryConsumeUsage(
+  deviceId: string,
+  type:     _UsageType,
+  limit:    number | null
+): ConsumeUsageResult {
+  const txn = db.transaction((): ConsumeUsageResult => {
+    const usage = getUsageToday(deviceId)
+    const field: keyof UsageRow =
+      type === 'score'   ? 'jobs_scored'   :
+      type === 'analyze' ? 'analyze_calls' :
+                           'profile_calls'
+    const used = usage[field]
+
+    if (limit !== null && used >= limit) {
+      return { allowed: false, used, limit }
+    }
+
+    incrementUsage(deviceId, type)
+    return { allowed: true, used: used + 1, limit }
+  })
+
+  return txn()
 }
 
 export function getTodayPanelOpenCount(deviceId: string): number {
@@ -254,8 +330,10 @@ export type EffectiveTier = 'free' | 'pro' | 'trial'
 //   1. Admin tier_override → always wins
 //   2. subscriptions_enabled=false → everyone is Pro (admin override mode)
 //   3. Within 7-day trial → trial (full access, same as Pro)
-//   4. Active/grace-period paid subscription → pro
-//   5. Everything else → free
+//   4. subscription_status='active' → pro
+//   5. subscription_status='past_due' AND within grace period → pro
+//   6. subscription_status='cancelled' AND ends_at in future → pro (paid through period)
+//   7. Everything else → free
 export function getEffectiveTier(deviceId: string): EffectiveTier {
   const device = db.prepare(`SELECT * FROM devices WHERE id = ?`).get(deviceId) as any
   if (!device) return 'free'
@@ -272,8 +350,20 @@ export function getEffectiveTier(deviceId: string): EffectiveTier {
   }
 
   if (device.tier === 'pro') {
-    if (device.subscription_status === 'active')   return 'pro'
-    if (device.subscription_status === 'past_due') return 'pro'
+    if (device.subscription_status === 'active') return 'pro'
+
+    // past_due — check grace period.
+    // No past_due_at on legacy rows that pre-date this column → trust LS and
+    // stay Pro; expireStaleSubscriptions will catch up on the hourly run.
+    if (device.subscription_status === 'past_due') {
+      if (!device.past_due_at) return 'pro'
+      const graceEnd = new Date(
+        new Date(device.past_due_at).getTime() + PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000
+      )
+      if (new Date() < graceEnd) return 'pro'
+      // grace expired — fall through to free
+    }
+
     if (device.subscription_status === 'cancelled' && device.subscription_ends_at) {
       if (new Date(device.subscription_ends_at) > new Date()) return 'pro'
     }
@@ -307,59 +397,67 @@ function _trialDaysLeft(trialStartedAt: string): number {
 }
 
 export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResult {
-  const tier   = getEffectiveTier(deviceId)
-  const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
-  const limit  = PANEL_LIMITS[tier]
+  // The whole gate (read tier → check existing → count → insert) must be atomic.
+  // Without a transaction, two concurrent panel opens can both see usedToday == limit-1
+  // and both insert, exceeding the limit. better-sqlite3's db.transaction() runs the
+  // function inside a SQLite transaction, serialising it against other writers.
+  const txn = db.transaction((deviceId: string, jobId: string): PanelOpenResult => {
+    const tier   = getEffectiveTier(deviceId)
+    const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
+    const limit  = PANEL_LIMITS[tier]
 
-  // ── Pro: unlimited, record for analytics ──────────────────────────────────
-  if (tier === 'pro') {
-    _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
-    return {
-      allowed: true, alreadyOpened: false, usedToday: 0,
-      limit: null, trial: false, trialDaysLeft: null,
-      resetAt: null, needs_upgrade: false,
-    }
-  }
-
-  // ── Trial & Free: check same-job re-open (free slot) ─────────────────────
-  if (jobId) {
-    const exists = _stmt(stmtPanelExists, 'panelExists').get(deviceId, jobId)
-    if (exists) {
+    // ── Pro: unlimited, record for analytics ──────────────────────────────────
+    if (tier === 'pro') {
+      _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
       return {
-        allowed: true, alreadyOpened: true,
-        usedToday: getTodayPanelOpenCount(deviceId),
-        limit,
-        trial:        tier === 'trial',
-        trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
+        allowed: true, alreadyOpened: false, usedToday: 0,
+        limit: null, trial: false, trialDaysLeft: null,
         resetAt: null, needs_upgrade: false,
       }
     }
-  }
 
-  const usedToday = getTodayPanelOpenCount(deviceId)
+    // ── Trial & Free: check same-job re-open (free slot) ─────────────────────
+    if (jobId) {
+      const exists = _stmt(stmtPanelExists, 'panelExists').get(deviceId, jobId)
+      if (exists) {
+        return {
+          allowed: true, alreadyOpened: true,
+          usedToday: getTodayPanelOpenCount(deviceId),
+          limit,
+          trial:        tier === 'trial',
+          trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
+          resetAt: null, needs_upgrade: false,
+        }
+      }
+    }
 
-  // ── Limit hit ─────────────────────────────────────────────────────────────
-  if (limit !== null && usedToday >= limit) {
+    const usedToday = getTodayPanelOpenCount(deviceId)
+
+    // ── Limit hit ─────────────────────────────────────────────────────────────
+    if (limit !== null && usedToday >= limit) {
+      return {
+        allowed: false, alreadyOpened: false, usedToday,
+        limit,
+        trial:        tier === 'trial',
+        trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
+        resetAt: _nextMidnightUTC(),
+        needs_upgrade: isSubscriptionsEnabled(),
+      }
+    }
+
+    // ── Within limit — record and allow ──────────────────────────────────────
+    _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
+
     return {
-      allowed: false, alreadyOpened: false, usedToday,
+      allowed: true, alreadyOpened: false, usedToday: usedToday + 1,
       limit,
       trial:        tier === 'trial',
       trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
-      resetAt: _nextMidnightUTC(),
-      needs_upgrade: isSubscriptionsEnabled(),
+      resetAt: null, needs_upgrade: false,
     }
-  }
+  })
 
-  // ── Within limit — record and allow ──────────────────────────────────────
-  _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
-
-  return {
-    allowed: true, alreadyOpened: false, usedToday: usedToday + 1,
-    limit,
-    trial:        tier === 'trial',
-    trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
-    resetAt: null, needs_upgrade: false,
-  }
+  return txn(deviceId, jobId)
 }
 
 // ── Subscription helpers ──────────────────────────────────────────────────────
@@ -374,19 +472,38 @@ export interface SubscriptionUpdate {
 }
 
 export function updateDeviceSubscription(params: SubscriptionUpdate): void {
-  db.prepare(`
-    UPDATE devices SET
-      email                = COALESCE(?, email),
-      tier                 = ?,
-      subscription_id      = ?,
-      subscription_status  = ?,
-      subscription_ends_at = ?,
-      last_seen            = datetime('now')
-    WHERE id = ?
-  `).run(
-    params.email, params.tier, params.subscriptionId,
-    params.status, params.endsAt, params.deviceId
-  )
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE devices SET
+        email                = COALESCE(?, email),
+        tier                 = ?,
+        subscription_id      = ?,
+        subscription_status  = ?,
+        subscription_ends_at = ?,
+        last_seen            = datetime('now')
+      WHERE id = ?
+    `).run(
+      params.email, params.tier, params.subscriptionId,
+      params.status, params.endsAt, params.deviceId
+    )
+
+    // past_due_at lifecycle:
+    //   transition INTO past_due (and not already set) → stamp now (UTC, ISO-8601)
+    //   anything else                                  → clear
+    //
+    // Why "not already set": LemonSqueezy fires payment_failed multiple times
+    // during dunning retries. We want past_due_at to mark the FIRST failure,
+    // not the most recent — that's what the grace period counts from.
+    if (params.status === 'past_due') {
+      db.prepare(`
+        UPDATE devices SET past_due_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id = ? AND past_due_at IS NULL
+      `).run(params.deviceId)
+    } else {
+      db.prepare(`UPDATE devices SET past_due_at = NULL WHERE id = ?`).run(params.deviceId)
+    }
+  })
+  tx()
 }
 
 export function getDeviceByEmail(email: string): any {
@@ -410,35 +527,46 @@ export function setTierOverride(deviceId: string, override: 'pro' | null): void 
 export type TrialActivationResult = 'activated' | 'already_active' | 'email_used'
 
 export function activateTrial(deviceId: string, email: string): TrialActivationResult {
-  const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
-  if (!device || device.trial_started_at) return 'already_active'
+  // The whole sequence (check device.trial_started_at → check previous trial by email
+  // → UPDATE) must be atomic. Without a transaction, two near-simultaneous requests
+  // with the same email on different devices can both pass the previousTrial check
+  // and both activate trials — defeating the one-trial-per-email rule.
+  const txn = db.transaction((deviceId: string, email: string): TrialActivationResult => {
+    const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
+    if (!device || device.trial_started_at) return 'already_active'
 
-  // One trial per email address — prevents unlimited trials via reinstall.
-  // We check all devices that have ever used this email, not just the current one.
-  const previousTrial = db.prepare(`
-    SELECT 1 FROM devices
-    WHERE LOWER(email) = LOWER(?) AND trial_started_at IS NOT NULL
-  `).get(email)
-  if (previousTrial) return 'email_used'
+    // One trial per email address — prevents unlimited trials via reinstall.
+    // We check all devices that have ever used this email, not just the current one.
+    const previousTrial = db.prepare(`
+      SELECT 1 FROM devices
+      WHERE LOWER(email) = LOWER(?) AND trial_started_at IS NOT NULL
+    `).get(email)
+    if (previousTrial) return 'email_used'
 
-  db.prepare(`
-    UPDATE devices SET
-      trial_started_at = datetime('now'),
-      email            = COALESCE(?, email)
-    WHERE id = ?
-  `).run(email, deviceId)
+    db.prepare(`
+      UPDATE devices SET
+        trial_started_at = datetime('now'),
+        email            = COALESCE(?, email)
+      WHERE id = ?
+    `).run(email, deviceId)
 
-  return 'activated'
+    return 'activated'
+  })
+
+  return txn(deviceId, email)
 }
 
 // ── Subscription expiry enforcement ──────────────────────────────────────────
-// Demotes cancelled subscriptions whose billing period has ended.
+// Demotes subscriptions that have aged out of their grace period.
 // Runs on startup and hourly from index.ts as a server-side safety net —
-// if LemonSqueezy fails to deliver the subscription_expired webhook, this
-// catches the expiry and prevents free access continuing indefinitely.
+// if LemonSqueezy fails to deliver a webhook, this catches the expiry.
+//
+// Two cases handled:
+//   (a) cancelled subs whose paid-through period has ended
+//   (b) past_due subs where the grace window has elapsed
 export function expireStaleSubscriptions(): void {
   try {
-    const result = db.prepare(`
+    const cancelled = db.prepare(`
       UPDATE devices SET
         tier                = 'free',
         subscription_status = 'expired'
@@ -447,8 +575,26 @@ export function expireStaleSubscriptions(): void {
         AND subscription_ends_at IS NOT NULL
         AND datetime(subscription_ends_at) < datetime('now')
     `).run()
-    if (result.changes > 0) {
-      console.log(`[Expiry] Downgraded ${result.changes} cancelled subscription(s) to free tier`)
+
+    // Past-due grace expiry. We also clear past_due_at since we're moving
+    // out of past_due — keeps the column meaningful for any future re-entry.
+    const pastDue = db.prepare(`
+      UPDATE devices SET
+        tier                = 'free',
+        subscription_status = 'expired',
+        past_due_at         = NULL
+      WHERE tier = 'pro'
+        AND subscription_status = 'past_due'
+        AND past_due_at IS NOT NULL
+        AND datetime(past_due_at, ?) < datetime('now')
+    `).run(`+${PAST_DUE_GRACE_DAYS} days`)
+
+    const total = cancelled.changes + pastDue.changes
+    if (total > 0) {
+      console.log(
+        `[Expiry] Downgraded ${total} subscription(s) → free ` +
+        `(cancelled: ${cancelled.changes}, past_due grace expired: ${pastDue.changes})`
+      )
     }
   } catch (err) {
     console.error('[Expiry] Failed to expire stale subscriptions:', err)

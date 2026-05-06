@@ -6,7 +6,10 @@ import {
   getUsageToday, getTodayPanelOpenCount,
   getDeviceByEmail, db
 } from '../db/database'
-import { TRIAL_DAYS, PANEL_LIMITS, CALL_LIMITS } from '../config/limits'
+import {
+  TRIAL_DAYS, PANEL_LIMITS, CALL_LIMITS,
+  TIER_COPY, PRICING
+} from '../config/limits'
 
 export const subscriptionRouter = Router()
 
@@ -34,21 +37,37 @@ subscriptionRouter.get('/status', (req: Request, res: Response) => {
     panel:   PANEL_LIMITS[t]          ?? null,
     analyze: CALL_LIMITS.analyze[t]   ?? null,
     profile: CALL_LIMITS.profile[t]   ?? null,
+    score:   null,                       // unlimited for every tier
   }
 
   res.json({
     tier,
-    trial_activated:       !!device?.trial_started_at,
-    trial_days_left:       trialDaysLeft,
+
+    // Trial state — `available` is what the panel/popup uses to gate the
+    // "Start trial" CTA. Once a device has any trial_started_at value
+    // (active OR expired), they can never start another.
+    trial_activated:   !!device?.trial_started_at,
+    trial_available:    !device?.trial_started_at,
+    trial_days_left:    trialDaysLeft,
+    trial_duration_days: TRIAL_DAYS,
+
     subscriptions_enabled: subsEnabled,
     subscription_status:   device?.subscription_status  ?? null,
     subscription_ends_at:  device?.subscription_ends_at ?? null,
+
     limits,
     usage_today: {
       panel:   panelOpens,
       analyze: usage.analyze_calls,
       profile: usage.profile_calls,
+      scored:  usage.jobs_scored,        // analytics only — not rate-limited
     },
+
+    // Tier copy + pricing — single source of truth lives in config/limits.ts.
+    // The popup reads from here so price or feature changes need only one edit
+    // and propagate to every install on next status fetch.
+    tiers:   TIER_COPY,
+    pricing: PRICING,
   })
 })
 
@@ -84,34 +103,41 @@ subscriptionRouter.post('/restore', (req: Request, res: Response) => {
   }
 
   if (existing.id !== deviceId) {
-    // Revoke the old device — one active device per subscription
-    db.prepare(`
-      UPDATE devices SET
-        tier                 = 'free',
-        subscription_id      = NULL,
-        subscription_status  = NULL,
-        subscription_ends_at = NULL
-      WHERE id = ?
-    `).run(existing.id)
+    // Revoke old + apply new must be atomic. Without the transaction wrapper,
+    // a crash between the two UPDATEs leaves the paying customer with a
+    // revoked old device and nothing on the new one — a worst-case outcome
+    // that's hard to recover from without manual DB intervention.
+    const migrate = db.transaction(() => {
+      // Revoke the old device — one active device per subscription
+      db.prepare(`
+        UPDATE devices SET
+          tier                 = 'free',
+          subscription_id      = NULL,
+          subscription_status  = NULL,
+          subscription_ends_at = NULL
+        WHERE id = ?
+      `).run(existing.id)
 
-    // Apply subscription to the new device
-    db.prepare(`
-      UPDATE devices SET
-        email                = ?,
-        tier                 = ?,
-        tier_override        = NULL,
-        subscription_id      = ?,
-        subscription_status  = ?,
-        subscription_ends_at = ?
-      WHERE id = ?
-    `).run(
-      existing.email,
-      existing.tier,
-      existing.subscription_id,
-      existing.subscription_status,
-      existing.subscription_ends_at,
-      deviceId
-    )
+      // Apply subscription to the new device
+      db.prepare(`
+        UPDATE devices SET
+          email                = ?,
+          tier                 = ?,
+          tier_override        = NULL,
+          subscription_id      = ?,
+          subscription_status  = ?,
+          subscription_ends_at = ?
+        WHERE id = ?
+      `).run(
+        existing.email,
+        existing.tier,
+        existing.subscription_id,
+        existing.subscription_status,
+        existing.subscription_ends_at,
+        deviceId
+      )
+    })
+    migrate()
   }
 
   const restoredTier = getEffectiveTier(deviceId)

@@ -618,13 +618,13 @@ async function renderOverview() {
       <div class="kpi-icon">${icons.activity}</div>
       <div class="kpi-value">${fmt(ct.total)}</div>
       <div class="kpi-label">Calls Today</div>
-      <div class="kpi-sub">${ct.panel_opens || 0} panels opened · ${ct.profile} parsed · ${ct.batch} scored</div>
+      <div class="kpi-sub">${ct.panel_opens || 0} panels opened · ${ct.profile} parsed · ${ct.scored} scored</div>
     </div>
     <div class="kpi-card kpi-purple">
       <div class="kpi-icon">${icons.chart}</div>
       <div class="kpi-value">${fmt(stats.calls_week.total)}</div>
       <div class="kpi-label">Calls This Week</div>
-      <div class="kpi-sub">${fmt(stats.calls_week.batch)} scored · ${fmt(stats.calls_week.analyze)} analyzed</div>
+      <div class="kpi-sub">${fmt(stats.calls_week.scored)} scored · ${fmt(stats.calls_week.analyze)} analyzed</div>
     </div>
     <div class="kpi-card kpi-amber">
       <div class="kpi-icon">${icons.clock}</div>
@@ -672,13 +672,13 @@ async function renderOverview() {
   });
 
   // Donut chart
-  const batchN = ct.batch, analyzeN = ct.analyze, profileN = ct.profile;
+  const scoredN = ct.scored, analyzeN = ct.analyze, profileN = ct.profile;
   const total  = ct.total || 1;
   charts.donut = new Chart(document.getElementById('donutChart'), {
     type: 'doughnut',
     data: {
       labels: ['Score', 'Analyze', 'Parse'],
-      datasets: [{ data: [batchN, analyzeN, profileN], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+      datasets: [{ data: [scoredN, analyzeN, profileN], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
     },
     options: {
       responsive: true,
@@ -689,7 +689,7 @@ async function renderOverview() {
   });
 
   document.getElementById('donut-legend').innerHTML = [
-    ['#059669','Score',batchN],
+    ['#059669','Score',scoredN],
     ['#7c3aed','Analyze',analyzeN],
     ['#0891b2','Parse',profileN],
   ].map(([c,l,v]) => `
@@ -745,7 +745,7 @@ async function renderAnalytics(days) {
     data: {
       labels,
       datasets: [
-        { label: 'Score',   data: daily.data.map(r=>r.batch),   backgroundColor: '#059669', borderRadius: 3, stack: 'a' },
+        { label: 'Score',   data: daily.data.map(r=>r.scored),   backgroundColor: '#059669', borderRadius: 3, stack: 'a' },
         { label: 'Analyze', data: daily.data.map(r=>r.analyze), backgroundColor: '#7c3aed', borderRadius: 3, stack: 'a' },
         { label: 'Parse',   data: daily.data.map(r=>r.profile), backgroundColor: '#0891b2', borderRadius: 3, stack: 'a' },
       ]
@@ -761,22 +761,22 @@ async function renderAnalytics(days) {
     }
   });
 
-  const totBatch   = daily.data.reduce((s,r) => s+r.batch,   0);
+  const totScored   = daily.data.reduce((s,r) => s+r.scored,   0);
   const totAnalyze = daily.data.reduce((s,r) => s+r.analyze, 0);
   const totProfile = daily.data.reduce((s,r) => s+r.profile, 0);
-  const totAll     = totBatch + totAnalyze + totProfile || 1;
+  const totAll     = totScored + totAnalyze + totProfile || 1;
 
   charts.analyticsDonut = new Chart(document.getElementById('analyticsDonut'), {
     type: 'doughnut',
     data: {
       labels: ['Score','Analyze','Parse'],
-      datasets: [{ data: [totBatch, totAnalyze, totProfile], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
+      datasets: [{ data: [totScored, totAnalyze, totProfile], backgroundColor: ['#059669','#7c3aed','#0891b2'], borderWidth: 0, hoverOffset: 4 }]
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: '68%', plugins: { legend: { display: false } } }
   });
 
   document.getElementById('analytics-legend').innerHTML = [
-    ['#059669','Score',totBatch],
+    ['#059669','Score',totScored],
     ['#7c3aed','Analyze',totAnalyze],
     ['#0891b2','Parse',totProfile],
   ].map(([c,l,v]) => `
@@ -797,7 +797,7 @@ async function renderAnalytics(days) {
               <span class="tbl-mono">${truncId(d.device_id)}</span>
               <button class="copy-btn" onclick="copyId('${d.device_id}')">copy</button>
             </td>
-            <td>${fmt(d.batch)}</td>
+            <td>${fmt(d.scored)}</td>
             <td>${fmt(d.analyze)}</td>
             <td>${fmt(d.profile)}</td>
             <td><strong>${fmt(d.total)}</strong></td>
@@ -912,7 +912,7 @@ async function renderDevices() {
               <button class="copy-btn" onclick="copyId('${d.device_id}')">copy</button>
               ${isActive ? '<span class="badge badge-green" style="margin-left:6px">active</span>' : ''}
             </td>
-            <td>${fmt(d.batch)}</td>
+            <td>${fmt(d.scored)}</td>
             <td>${fmt(d.analyze)}</td>
             <td>${fmt(d.profile)}</td>
             <td><strong>${fmt(d.total)}</strong></td>

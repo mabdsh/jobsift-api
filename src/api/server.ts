@@ -59,7 +59,9 @@ app.get('/health', (_req, res) => {
 })
 
 // ── API routes ─────────────────────────────────────────────────────────────────
-app.use('/api/score',        requireDevice, checkRateLimit('batch'),   scoreRouter)
+// /api/score has no rate-limit middleware — job card scoring is unlimited for
+// every tier. The router itself increments a per-job-card counter for analytics.
+app.use('/api/score',        requireDevice,                            scoreRouter)
 app.use('/api/analyze',      requireDevice, checkRateLimit('analyze'), analyzeRouter)
 app.use('/api/profile',      requireDevice, checkRateLimit('profile'), profileRouter)
 app.use('/api/panel',        requireDevice, panelRouter)

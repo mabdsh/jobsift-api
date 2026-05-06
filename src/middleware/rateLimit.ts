@@ -1,13 +1,16 @@
 import { Request, Response, NextFunction } from 'express'
 import {
-  getUsageToday, incrementUsage, UsageType, EffectiveTier,
-  isSubscriptionsEnabled, getEffectiveTier
+  EffectiveTier,
+  isSubscriptionsEnabled, getEffectiveTier, tryConsumeUsage, incrementUsage
 } from '../db/database'
-import { CALL_LIMITS } from '../config/limits'
+import { CALL_LIMITS, RateLimitedType } from '../config/limits'
 
 // ── Limit resolution ──────────────────────────────────────────────────────────
-// All numbers live in src/config/limits.ts — never hardcode values here.
+// All numbers and copy live in src/config/limits.ts — never hardcode here.
 // null = unlimited for that tier + type combination.
+//
+// Note: 'score' is intentionally NOT rate-limited — job card scoring is
+// unlimited for every tier. Only 'analyze' and 'profile' flow through here.
 
 function nextMidnightUTC(): string {
   const d = new Date()
@@ -15,57 +18,44 @@ function nextMidnightUTC(): string {
   return d.toISOString()
 }
 
-function usageField(
-  type: UsageType
-): 'batch_calls' | 'analyze_calls' | 'profile_calls' {
-  if (type === 'batch')   return 'batch_calls'
-  if (type === 'analyze') return 'analyze_calls'
-  return 'profile_calls'
-}
-
-function limitMessage(type: UsageType, limit: number, tier: EffectiveTier = 'free'): string {
+function limitMessage(type: RateLimitedType, limit: number, tier: EffectiveTier = 'free'): string {
   const suffix = tier === 'trial'
     ? ` Resets at midnight UTC.`
     : ` Upgrade to Pro for unlimited access.`
-  if (type === 'batch')   return `Daily scoring limit (${limit} batches) reached.${suffix}`
   if (type === 'analyze') return `Daily analysis limit (${limit}) reached.${suffix}`
   return `Daily profile parse limit (${limit}) reached.${suffix}`
 }
 
-export function checkRateLimit(type: UsageType) {
+export function checkRateLimit(type: RateLimitedType) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const deviceId = req.deviceId
     if (!deviceId) { res.status(401).json({ error: 'unauthorized' }); return }
 
-    // Subscriptions disabled globally → everyone is effectively Pro
+    // Subscriptions disabled globally → everyone is effectively Pro.
+    // Still increment for analytics, but skip the limit check entirely.
     if (!isSubscriptionsEnabled()) {
       incrementUsage(deviceId, type)
       next()
       return
     }
 
-    const tier  = getEffectiveTier(deviceId)
+    const tier = getEffectiveTier(deviceId)
     const limit: number | null =
       tier === 'free'  ? CALL_LIMITS[type].free  :
       tier === 'trial' ? CALL_LIMITS[type].trial :
                          CALL_LIMITS[type].pro
 
-    // Unlimited — still increment for analytics
-    if (limit === null) {
-      incrementUsage(deviceId, type)
-      next()
-      return
-    }
+    // Atomic check + increment. Without this, two concurrent requests on a
+    // free user's last allowed call can both observe used == limit-1 and both
+    // increment, letting the user exceed their daily allowance.
+    const result = tryConsumeUsage(deviceId, type, limit)
 
-    const usage = getUsageToday(deviceId)
-    const used  = usage[usageField(type)]
-
-    if (used >= limit) {
+    if (!result.allowed) {
       res.status(429).json({
         error:         tier === 'trial' ? 'trial_daily_limit' : 'rate_limit_exceeded',
-        message:       limitMessage(type, limit, tier),
-        limit,
-        used,
+        message:       limitMessage(type, result.limit!, tier),
+        limit:         result.limit,
+        used:          result.used,
         tier,
         needs_upgrade: tier === 'free',
         reset_at:      nextMidnightUTC(),
@@ -73,7 +63,6 @@ export function checkRateLimit(type: UsageType) {
       return
     }
 
-    incrementUsage(deviceId, type)
     next()
   }
 }

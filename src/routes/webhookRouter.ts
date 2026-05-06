@@ -27,6 +27,7 @@ function tierForStatus(status: string | undefined): 'pro' | 'free' {
     case 'past_due':  return 'pro'   // payment failed, still in grace period
     case 'cancelled': return 'pro'   // paid through subscription_ends_at
     case 'expired':   return 'free'  // billing period ended after cancellation
+    case 'refunded':  return 'free'  // payment refunded — revoke immediately
     case 'paused':    return 'free'  // subscription on hold
     default:          return 'free'  // unknown status — safe default
   }
@@ -121,7 +122,10 @@ webhookRouter.post('/', (req: Request, res: Response) => {
       })
       break
 
-    // Payment failed — give a grace period, still Pro
+    // Payment failed — give a grace period, still Pro.
+    // updateDeviceSubscription will stamp past_due_at on first transition
+    // and preserve it across multiple LS dunning retries — so the grace
+    // window measured from the FIRST failure, not the most recent.
     case 'subscription_payment_failed':
       updateDeviceSubscription({
         deviceId,
@@ -129,6 +133,20 @@ webhookRouter.post('/', (req: Request, res: Response) => {
         subscriptionId: subId,
         status: 'past_due',
         tier:   'pro',
+        endsAt: null,
+      })
+      break
+
+    // Payment was refunded — revoke Pro immediately.
+    // We don't try to reason about partial vs full refunds; LemonSqueezy
+    // controls the subscription state. If money is going back, access stops.
+    case 'subscription_payment_refunded':
+      updateDeviceSubscription({
+        deviceId,
+        email,
+        subscriptionId: subId,
+        status: 'refunded',
+        tier:   'free',
         endsAt: null,
       })
       break

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { db, getSetting, setSetting, setTierOverride, clearRequestLogs } from '../db/database'
+import { PRICING } from '../config/limits'
 
 export const adminRouter = Router()
 
@@ -96,14 +97,14 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
   const activeToday  = (db.prepare(`SELECT COUNT(DISTINCT device_id) as c FROM usage WHERE date = date('now')`).get() as any).c
 
   const callsToday = db.prepare(`
-    SELECT COALESCE(SUM(batch_calls),0)   as batch,
+    SELECT COALESCE(SUM(jobs_scored),0)   as scored,
            COALESCE(SUM(analyze_calls),0) as analyze,
            COALESCE(SUM(profile_calls),0) as profile
     FROM usage WHERE date = date('now')
   `).get() as any
 
   const callsWeek = db.prepare(`
-    SELECT COALESCE(SUM(batch_calls),0)   as batch,
+    SELECT COALESCE(SUM(jobs_scored),0)   as scored,
            COALESCE(SUM(analyze_calls),0) as analyze,
            COALESCE(SUM(profile_calls),0) as profile
     FROM usage WHERE date >= ?
@@ -141,17 +142,17 @@ adminRouter.get('/stats', (_req: Request, res: Response) => {
       trial_now:    trialUsersNow,
     },
     calls_today: {
-      batch:        callsToday.batch,
+      scored:        callsToday.scored,
       analyze:      callsToday.analyze,
       profile:      callsToday.profile,
       panel_opens:  panelOpensToday,
-      total:        callsToday.batch + callsToday.analyze + callsToday.profile,
+      total:        callsToday.scored + callsToday.analyze + callsToday.profile,
     },
     calls_week: {
-      batch:   callsWeek.batch,
+      scored:   callsWeek.scored,
       analyze: callsWeek.analyze,
       profile: callsWeek.profile,
-      total:   callsWeek.batch + callsWeek.analyze + callsWeek.profile,
+      total:   callsWeek.scored + callsWeek.analyze + callsWeek.profile,
     },
     performance: {
       avg_latency_ms:            Math.round(perf.avg_lat),
@@ -169,10 +170,10 @@ adminRouter.get('/daily', (req: Request, res: Response) => {
 
   const rows = db.prepare(`
     SELECT date,
-      COALESCE(SUM(batch_calls),0)                             as batch,
+      COALESCE(SUM(jobs_scored),0)                             as scored,
       COALESCE(SUM(analyze_calls),0)                           as analyze,
       COALESCE(SUM(profile_calls),0)                           as profile,
-      COALESCE(SUM(batch_calls+analyze_calls+profile_calls),0) as total
+      COALESCE(SUM(jobs_scored+analyze_calls+profile_calls),0) as total
     FROM usage
     WHERE date >= ?
     GROUP BY date
@@ -209,10 +210,10 @@ adminRouter.get('/usage', (req: Request, res: Response) => {
 
   const rows = db.prepare(`
     SELECT d.id as device_id, d.tier, d.tier_override, d.subscription_status, d.email,
-      SUM(u.batch_calls)   as batch,
+      SUM(u.jobs_scored)   as scored,
       SUM(u.analyze_calls) as analyze,
       SUM(u.profile_calls) as profile,
-      SUM(u.batch_calls+u.analyze_calls+u.profile_calls) as total,
+      SUM(u.jobs_scored+u.analyze_calls+u.profile_calls) as total,
       MIN(u.date) as first_active, MAX(u.date) as last_active
     FROM usage u
     JOIN devices d ON d.id = u.device_id
@@ -263,7 +264,11 @@ adminRouter.delete('/logs', (_req: Request, res: Response) => {
 // ── GET /admin/subscription/stats ─────────────────────────────────────────────
 adminRouter.get('/subscription/stats', (_req: Request, res: Response) => {
   const subsEnabled   = getSetting('subscriptions_enabled') === 'true'
-  const pricePerMonth = parseFloat(process.env.PRICE_PER_MONTH || '7')
+  // MRR estimate uses the monthly price from config/limits.ts.
+  // Yearly subscribers pay monthly_equivalent ≈ pricing.yearly_usd / 12,
+  // so this is a slight overestimate for that segment. Acceptable for an
+  // admin dashboard metric.
+  const pricePerMonth = PRICING.monthly_usd
 
   const tierCounts = db.prepare(`
     SELECT tier, COUNT(*) as count FROM devices GROUP BY tier

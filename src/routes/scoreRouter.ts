@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { batchScoreJobs }            from '../services/groqClient'
-import { logRequest }                from '../db/database'
+import { logRequest, incrementUsage } from '../db/database'
 
 export const scoreRouter = Router()
 
@@ -30,6 +30,13 @@ scoreRouter.post('/batch', async (req: Request, res: Response) => {
     ...j,
     rawText: typeof j.rawText === 'string' ? j.rawText.slice(0, 4000) : '',
   }))
+
+  // Score is unlimited for all tiers, so there's no rate-limit middleware.
+  // We still increment the per-job-card counter for analytics — this is the
+  // "1.2M jobs scored this week" metric in the admin panel.
+  if (req.deviceId) {
+    incrementUsage(req.deviceId, 'score', sanitizedJobs.length)
+  }
 
   try {
     const results = await batchScoreJobs(profile, sanitizedJobs)

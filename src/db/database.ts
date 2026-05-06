@@ -3,7 +3,7 @@ import type { Statement } from 'better-sqlite3'
 import path             from 'path'
 import fs               from 'fs'
 import { randomUUID }   from 'crypto'
-import { TRIAL_DAYS, PANEL_LIMITS, PAST_DUE_GRACE_DAYS, UsageType } from '../config/limits'
+import { TRIAL_DAYS, PANEL_LIMITS, PAST_DUE_GRACE_DAYS, UsageType, PRICING, LIMITS } from '../config/limits'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DB_PATH  = path.join(DATA_DIR, 'rolevance.db')
@@ -383,6 +383,16 @@ export interface PanelOpenResult {
   trialDaysLeft: number | null
   resetAt:       string | null
   needs_upgrade: boolean
+
+  // ── Display copy (PR 1: pricing consolidation) ───────────────────────────
+  // Embedded in every panel-check response so content scripts (panel.js,
+  // ai-analyzer.js) can render upgrade CTAs without hardcoding strings.
+  // All values trace back to config/limits.ts — change a price there and
+  // every panel on the next open reflects it.
+  pricing:          typeof PRICING
+  trial_available:  boolean
+  trial_duration_days: number
+  trial_limits:     { panel: number | null; analyze: number | null }
 }
 
 function _nextMidnightUTC(): string {
@@ -396,6 +406,21 @@ function _trialDaysLeft(trialStartedAt: string): number {
   return Math.max(1, Math.ceil((end.getTime() - Date.now()) / 86400000))
 }
 
+// Display copy bundle attached to every panel-check response.
+// Centralising this keeps the four return paths in recordPanelOpen identical
+// for the new fields — change copy in one place, never in five.
+function _displayCopy(trialAvailable: boolean) {
+  return {
+    pricing: PRICING,
+    trial_available: trialAvailable,
+    trial_duration_days: TRIAL_DAYS,
+    trial_limits: {
+      panel:   LIMITS.trial.panel,
+      analyze: LIMITS.trial.analyze,
+    },
+  }
+}
+
 export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResult {
   // The whole gate (read tier → check existing → count → insert) must be atomic.
   // Without a transaction, two concurrent panel opens can both see usedToday == limit-1
@@ -406,6 +431,12 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
     const device = db.prepare(`SELECT trial_started_at FROM devices WHERE id = ?`).get(deviceId) as any
     const limit  = PANEL_LIMITS[tier]
 
+    // Trial is available only for free users who have never activated one.
+    // Trial users (currently active) and pro users get `false` — there's no
+    // upsell to offer them.
+    const trialAvailable = tier === 'free' && !device?.trial_started_at
+    const copy = _displayCopy(trialAvailable)
+
     // ── Pro: unlimited, record for analytics ──────────────────────────────────
     if (tier === 'pro') {
       _stmt(stmtPanelInsert, 'panelInsert').run(deviceId, jobId || randomUUID())
@@ -413,6 +444,7 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
         allowed: true, alreadyOpened: false, usedToday: 0,
         limit: null, trial: false, trialDaysLeft: null,
         resetAt: null, needs_upgrade: false,
+        ...copy,
       }
     }
 
@@ -427,6 +459,7 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
           trial:        tier === 'trial',
           trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
           resetAt: null, needs_upgrade: false,
+          ...copy,
         }
       }
     }
@@ -442,6 +475,7 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
         trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
         resetAt: _nextMidnightUTC(),
         needs_upgrade: isSubscriptionsEnabled(),
+        ...copy,
       }
     }
 
@@ -454,6 +488,7 @@ export function recordPanelOpen(deviceId: string, jobId: string): PanelOpenResul
       trial:        tier === 'trial',
       trialDaysLeft: device?.trial_started_at ? _trialDaysLeft(device.trial_started_at) : null,
       resetAt: null, needs_upgrade: false,
+      ...copy,
     }
   })
 

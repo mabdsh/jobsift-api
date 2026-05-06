@@ -7,6 +7,7 @@
 
 import { Router, Request, Response } from 'express'
 import { recordPanelOpen }           from '../db/database'
+import { PRICING, TRIAL_DAYS, LIMITS } from '../config/limits'
 
 export const panelRouter = Router()
 
@@ -26,7 +27,9 @@ panelRouter.post('/open', (req: Request, res: Response) => {
     res.json(result)
   } catch (err: any) {
     console.error('[Panel] recordPanelOpen error:', err)
-    // Fail open — a server-side error must never block a user from their panel
+    // Fail open — a server-side error must never block a user from their panel.
+    // We still attach the display-copy bundle so the content script never has
+    // to handle an undefined pricing/trial_limits object.
     res.json({
       allowed:       true,
       alreadyOpened: false,
@@ -36,6 +39,10 @@ panelRouter.post('/open', (req: Request, res: Response) => {
       trialDaysLeft: null,
       resetAt:       null,
       needs_upgrade: false,
+      pricing:             PRICING,
+      trial_available:     false,  // unsafe to advertise trial when DB is down
+      trial_duration_days: TRIAL_DAYS,
+      trial_limits:        { panel: LIMITS.trial.panel, analyze: LIMITS.trial.analyze },
     })
   }
 })
